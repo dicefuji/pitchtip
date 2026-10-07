@@ -1,0 +1,36 @@
+[project]
+name = "pitchtip"
+version = "0.1.0"
+description = "Find pitcher tips (pre-release tells) from broadcast video"
+readme = "README.md"
+authors = [
+    { name = "dicefuji", email = "fujiwaraadaisuke@gmail.com" }
+]
+requires-python = ">=3.11"
+dependencies = [
+    "joblib>=1.6.0",
+    "numpy>=2.4.6",
+    "opencv-python-headless>=5.0.0.93",
+    "pandas>=3.0.6",
+    "pyarrow>=25.0.1",
+    "python-dotenv>=1.2.4",
+    "requests>=2.34.2",
+    "scikit-learn>=1.9.1",
+    "scipy>=1.17.1",
+    "tqdm>=4.70.1",
+    "typer>=0.27.3",
+    "typesafe-sdk>=0.7.2",
+    "ultralytics>=8.4.174",
+]
+
+[build-system]
+requires = ["uv_build>=0.11.7,<0.12.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
+
+[project.scripts]
+pitchtip = "pitchtip.cli:app"
