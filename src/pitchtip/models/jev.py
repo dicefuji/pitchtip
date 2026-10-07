@@ -46,23 +46,35 @@ class JevDecider:
             sig = ", ".join(f"{describe(cols[i])} {prof[i]:+.2f}" for i in top)
             self.criteria[c] = f"{c}: {self.base[c]:.0%} of this pitcher's pitches. Typical profile: {sig}"
 
-    def state(self, row: pd.Series, pitcher: str) -> dict:
+    def state(self, row: pd.Series, pitcher: str, vision: dict | None = None) -> dict:
+        """vision: optional local-model probabilities for this pitch (fusion mode)."""
         z = np.nan_to_num((row[self.cols].to_numpy(np.float64) - self.mu) / self.sd)
         nn = np.argsort(((self.Z - z) ** 2).sum(1))[: self.k]
         named = lambda v: {describe(c): round(float(x), 2) for c, x in zip(self.cols, v)}
-        return {
+        st = {
             "pitcher": pitcher,
             "arsenal_base_rates": {c: round(float(p), 3) for c, p in self.base.items()},
             "known_tells": self.tells.tell.tolist(),
             "this_pitch": named(z),
             "similar_past_pitches": [{"pitch": str(self.y[i]), **named(self.Z[i])} for i in nn],
         }
+        if "balls" in row:
+            st["situation"] = {
+                "count": f"{int(row.balls)}-{int(row.strikes)}", "outs": int(row.outs),
+                "runners_on": bool(row.men_on), "batter_side": row.batter_side, "inning": int(row.inning),
+            }
+        if vision is not None:
+            st["vision_model_probabilities"] = {k: round(float(v), 3) for k, v in vision.items()}
+            st["vision_model_note"] = ("A pose model trained on this pitcher's past games; it "
+                                       "ranks pitches well but is overconfident.")
+        return st
 
     def question(self):
         from typesafe_sdk import Choice
         return Choice(instructions=INSTRUCTIONS, criteria=self.criteria)
 
-    async def predict_many(self, rows: pd.DataFrame, pitcher: str, concurrency: int = 8) -> list[dict]:
+    async def predict_many(self, rows: pd.DataFrame, pitcher: str, concurrency: int = 8,
+                           vision: list[dict] | None = None) -> list[dict]:
         from typesafe_sdk import AsyncTypeSafeClient
         if not os.environ.get("TYPESAFE_API_KEY"):
             raise RuntimeError("Set TYPESAFE_API_KEY (console.typesafe.ai) to use Jev.")
@@ -70,8 +82,8 @@ class JevDecider:
         q = self.question()
         kwargs = {"model": self.model} if self.model else {}
 
-        async def one(client, row):
-            st = self.state(row, pitcher)
+        async def one(client, row, vis):
+            st = self.state(row, pitcher, vis)
             async with sem:
                 t0 = time.perf_counter()
                 res = await client.system_one(state=st, questions={"pitch": q}, **kwargs)
@@ -82,4 +94,5 @@ class JevDecider:
                     "approx_input_tokens": len(json.dumps(st)) // 4}
 
         async with AsyncTypeSafeClient() as client:
-            return await asyncio.gather(*(one(client, r) for _, r in rows.iterrows()))
+            vis = vision or [None] * len(rows)
+            return await asyncio.gather(*(one(client, r, v) for (_, r), v in zip(rows.iterrows(), vis)))

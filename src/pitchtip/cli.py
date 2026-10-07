@@ -54,7 +54,7 @@ def tips(pitcher: str, mode: str = "type", top: int = 10, per_game: bool = True)
 
 @app.command()
 def eval(pitcher: str, mode: str = typer.Option("type", help="type | fb (fastball vs offspeed)"),
-         model: str = typer.Option("local", help="local | jev"), per_game: bool = True,
+         model: str = typer.Option("local", help="local | jev | fusion (local vision model -> Jev)"), per_game: bool = True,
          permutations: int = 20, no_hands: bool = False, max_jev: int = 200):
     """Game-grouped evaluation vs. the pitcher's base rate."""
     from pitchtip.models import local
@@ -75,7 +75,13 @@ def eval(pitcher: str, mode: str = typer.Option("type", help="type | fb (fastbal
         tells = find_tells(df[tr], y[tr], top=12)
         jd = JevDecider(df[tr], y[tr], tells)
         test = df[te].head(max_jev)
-        res = asyncio.run(jd.predict_many(test, pitcher))
+        vision = None
+        if model == "fusion":
+            trm, tem = tr.to_numpy(), np.flatnonzero(te.to_numpy())[:max_jev]
+            lm = local.fit(df[tr], h[trm] if h is not None else None, y[tr])
+            pv = lm.predict_proba(test, h[tem] if h is not None else None)
+            vision = [dict(zip(lm.clf.classes_, row)) for row in pv]
+        res = asyncio.run(jd.predict_many(test, pitcher, vision=vision))
         classes = sorted(y.unique())
         proba = np.array([[r["probabilities"].get(c, 0) for c in classes] for r in res])
         s = local.score(y[te].head(max_jev), proba, classes)
