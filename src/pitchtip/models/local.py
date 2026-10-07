@@ -12,7 +12,7 @@ import numpy as np
 import pandas as pd
 from sklearn.decomposition import PCA
 from sklearn.ensemble import HistGradientBoostingClassifier
-from sklearn.metrics import accuracy_score, log_loss
+from sklearn.metrics import accuracy_score, log_loss, roc_auc_score
 from sklearn.model_selection import GroupKFold
 
 from pitchtip import config
@@ -73,6 +73,12 @@ def score(y: pd.Series, proba: np.ndarray, classes: list[str]) -> dict:
         "base_rate": float(prior.max()),
         "log_loss": log_loss(y, np.clip(proba, 1e-6, 1), labels=classes),
         "prior_log_loss": log_loss(y, np.tile(prior, (len(y), 1)), labels=classes),
+        # Tips are usable even when weak if confident calls are reliable: per pitch, how
+        # often is it right in the 10% of pitches where the model likes it most?
+        "auc_one_vs_rest": {c: float(roc_auc_score(y == c, proba[:, j])) for j, c in enumerate(classes)},
+        "top10pct_precision": {c: float((y[proba[:, j] >= np.quantile(proba[:, j], 0.9)] == c).mean())
+                               for j, c in enumerate(classes)},
+        "base_rates": dict(zip(classes, prior.round(3).tolist())),
     }
 
 
