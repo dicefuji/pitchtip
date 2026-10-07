@@ -35,18 +35,21 @@ def extract(pitcher: str, overwrite: bool = False):
     typer.echo(f"features for {len(df)} pitches")
 
 
-def _xy(pitcher: str, mode: str, per_game: bool):
+def _xy(pitcher: str, mode: str, per_game: bool, situation: str = "all"):
     df, hands = dataset.load_features(pitcher, per_game)
     y = make_labels(df.pitch_type, mode)
-    keep = (y != "OTHER").to_numpy()
+    keep = (y != "OTHER").to_numpy().copy()
+    if situation != "all":
+        keep &= df[situation].astype(bool).to_numpy()
     return df[keep].reset_index(drop=True), hands[keep], y[keep].reset_index(drop=True)
 
 
 @app.command()
-def tips(pitcher: str, mode: str = "type", top: int = 10, per_game: bool = True):
+def tips(pitcher: str, mode: str = "type", top: int = 10, per_game: bool = True,
+         situation: str = typer.Option("all", help="all | men_on | risp")):
     """List the strongest single-feature tells."""
     from pitchtip.tips import find_tells
-    df, _, y = _xy(pitcher, mode, per_game)
+    df, _, y = _xy(pitcher, mode, per_game, situation)
     t = find_tells(df, y, top)
     for line in t.tell:
         typer.echo(f"• {line}")
@@ -55,12 +58,20 @@ def tips(pitcher: str, mode: str = "type", top: int = 10, per_game: bool = True)
 @app.command()
 def eval(pitcher: str, mode: str = typer.Option("type", help="type | fb (fastball vs offspeed)"),
          model: str = typer.Option("local", help="local | jev | fusion (local vision model -> Jev)"), per_game: bool = True,
-         permutations: int = 20, no_hands: bool = False, max_jev: int = 200):
-    """Game-grouped evaluation vs. the pitcher's base rate."""
+         permutations: int = 20, no_hands: bool = False, max_jev: int = 200,
+         situation: str = typer.Option("all", help="all | men_on | risp"),
+         split: str = typer.Option("cv", help="cv (game-grouped folds) | chrono (train early games, test late)")):
+    """Evaluation vs. the pitcher's base rate."""
     from pitchtip.models import local
-    df, hands, y = _xy(pitcher, mode, per_game)
+    df, hands, y = _xy(pitcher, mode, per_game, situation)
     h = None if no_hands else hands
-    if model == "local":
+    if model == "local" and split == "chrono":
+        games = sorted(df.game_pk.unique())
+        tr = (df.game_pk < games[int(len(games) * 0.7)]).to_numpy()
+        m = local.fit(df[tr], h[tr] if h is not None else None, y[tr])
+        p = m.predict_proba(df[~tr], h[~tr] if h is not None else None)
+        s = local.score(y[~tr].reset_index(drop=True), p, list(m.clf.classes_))
+    elif model == "local":
         oof, classes = local.cross_val(df, h, y)
         s = local.score(y, oof, classes)
         acc_pred = np.array(classes)[oof.argmax(1)]

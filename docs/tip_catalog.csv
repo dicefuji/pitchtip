@@ -1,0 +1,17 @@
+pitcher,throws,date,opponent,game_type,tell,region,pitches,set,cf_visible,confidence,source
+Tyler Glasnow,R,2019-10-10,HOU,D,Glove set higher before FB lower before CU,glove_height,FF vs CU,set,Y,confirmed,https://www.mlb.com/news/tyler-glasnow-says-he-was-tipping-pitches-in-alds
+Yu Darvish,R,2017-10-27,HOU,W,Re-grip on way to glove for SL/FC,regrip,FB vs SL/FC,both,P,speculation,https://www.nbcsports.com/mlb/news/how-yu-darvish-tipped-pitches-during-world-series
+Yu Darvish,R,2017-11-01,HOU,W,Re-grip on way to glove for SL/FC,regrip,FB vs SL/FC,both,P,speculation,https://www.nbcsports.com/mlb/news/how-yu-darvish-tipped-pitches-during-world-series
+Yu Darvish,R,2017-07-26,MIA,R,Hands pause before FB; quick into glove before BB,timing,FB vs BB,,Y,confirmed,https://www.ksl.com/article/sports/national/darvish-says-he-can-easily-fix-the-issue-of-tipping-pitches/45217858
+Luis Severino,R,2018-10-08,BOS,D,Glance to 3B before FB with runner on 2B; hands higher on FB,head+glove_height,FB vs SL/CH,stretch,P,manager,https://www.cbssports.com/mlb/news/yankees-believe-luis-severino-was-tipping-his-pitches-in-alds-though-theres-more-to-his-struggles
+Stephen Strasburg,R,2019-10-29,HOU,W,Reach into glove at waist to grip before set,regrip,,set,P,confirmed,https://www.mlb.com/news/stephen-strasburg-game-6-start-nationals-astros
+Jay Jackson,R,2023-05-15,NYY,R,Hands raised near ear while gripping; timing,elbows+timing,SL vs FB,set,Y,confirmed,https://www.si.com/mlb/2023/05/17/blue-jays-pitcher-tipping-pitches-aaron-judge-at-bat-cheating-accusations-yankees
+Clarke Schmidt,R,2024-05-21,SEA,R,Ball visibility in glove from 2B: none SI / some ST / lots FC,glove_open,SI/ST/FC,stretch,Y,confirmed,https://www.mlb.com/yankees/news/josh-rojas-confirms-yankees-clarke-schmidt-was-tipping-pitches
+Yoshinobu Yamamoto,R,2024-10-05,SD,D,Glove giving away pitches to runner on 2B,glove_open,,stretch,Y,manager,https://www.si.com/mlb/dave-roberts-admits-yoshinobu-yamamoto-tipping-pitches-vs-padres
+Jesus Luzardo,L,2025-05-31,MIL,R,Glove lower and open with runners on,glove_open+glove_height,,stretch,Y,confirmed,https://www.inquirer.com/phillies/phillies-jesus-luzardo-tipping-pitches-20250608.html
+Jesus Luzardo,L,2025-06-05,TOR,R,Glove lower and open with runners on,glove_open+glove_height,,stretch,Y,confirmed,https://www.inquirer.com/phillies/phillies-jesus-luzardo-tipping-pitches-20250608.html
+Ryan Helsley,R,2025-08-26,PHI,R,Arm tick coming set differs FB vs SL,elbows,FB vs SL,set,Y,confirmed,https://www.mlb.com/news/ryan-helsley-addresses-recent-pitch-tipping-issues
+Max Scherzer,R,2025-09-07,NYY,R,Changeup grip visible from 1B,glove_open,CH vs FB,stretch,P,confirmed,https://www.espn.com/mlb/story/_/id/46191423/judge-tips-rice-ahead-scherzer-changeup-leading-hr
+Hunter Greene,R,2025-09-30,LAD,F,Glove action revealing breaking balls,glove_open,BB vs FB,,?,speculation,https://awfulannouncing.com/mlb/buster-olney-reds-tipping-pitches-against-dodgers.html
+Matt Strahm,L,2025-10-04,LAD,D,Runner on 2B could see in glove,glove_open,,stretch,Y,disputed,https://fansided.com/mlb/revisiting-the-annoyingly-simple-phillies-pitch-tipping-that-lost-game-1-01k6xd5p6xcp
+Mason Miller,R,2026-10-04,MIL,D,Glove touching sleeve = SL; knuckles visible on FB,glove_open+glove_height,FB vs SL,stretch,Y,disputed,https://www.mlb.com/news/mason-miller-says-blown-save-was-lack-of-command-not-tipping

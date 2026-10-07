@@ -40,6 +40,9 @@ def per_frame(cp: ClipPose, ph: Phases, hand: str | None) -> dict[str, np.ndarra
         "throw_wrist_y": -rel(f"{t}_wrist")[:, 1],
         "glove_elbow_ang": _angle(p(f"{g}_shoulder"), p(f"{g}_elbow"), p(f"{g}_wrist")),
         "throw_elbow_ang": _angle(p(f"{t}_shoulder"), p(f"{t}_elbow"), p(f"{t}_wrist")),
+        # Elbows flaring vs tucked when coming set (Helsley 2025, Pettitte 2001).
+        "elbow_spread": np.linalg.norm(p("l_elbow") - p("r_elbow"), axis=-1)
+                        / (np.linalg.norm(p("l_shoulder") - p("r_shoulder"), axis=-1) + 1e-9),
         "glove_elbow_out": (p(f"{g}_elbow") - p(f"{g}_shoulder"))[:, 0] / ph.scale,
         "throw_elbow_out": (p(f"{t}_elbow") - p(f"{t}_shoulder"))[:, 0] / ph.scale,
         "shoulder_tilt": _tilt(p("l_shoulder"), p("r_shoulder")),
@@ -73,5 +76,20 @@ def clip_features(cp: ClipPose, ph: Phases, hand: str | None) -> tuple[dict[str,
         n += 1
     feats["set_still_seconds"] = n / cp.fps
     feats["onset_time"] = float(cp.t[o])
+    # Glove-region appearance over the set, from the stored grayscale hand patches:
+    #   motion energy  -> re-gripping / fidgeting in the glove (Darvish, Strasburg)
+    #   bright fraction -> white ball or fingers showing in an open glove (Schmidt, Luzardo)
+    hp = cp.hands[s:o].astype(np.float32) / 255.0
+    if len(hp) > 1:
+        d = np.abs(np.diff(hp, axis=0)).mean(axis=(1, 2))
+        feats["set_hand_motion_mean"] = float(d.mean())
+        feats["set_hand_motion_peaks"] = float((d > d.mean() + 2 * d.std()).sum())
+    else:
+        feats["set_hand_motion_mean"] = feats["set_hand_motion_peaks"] = np.nan
+    feats["set_hand_bright_frac"] = float((hp > 0.8).mean()) if len(hp) else np.nan
+    # Throwing-wrist movement during the set (re-grip shows up as wrist travel).
+    tw = cp.kpts[s:o, KP[f"{'l' if lead_side(hand) == 'r' else 'r'}_wrist"], :2]
+    step = np.linalg.norm(np.diff(tw, axis=0), axis=-1) / ph.scale
+    feats["set_throw_wrist_travel"] = float(np.nansum(step)) if len(step) else np.nan
     patch = cp.hands[s:o].astype(np.float32).mean(axis=0) / 255.0
     return feats, patch

@@ -16,6 +16,9 @@ READABLE = {
     "shoulder_tilt": "shoulder tilt", "torso_lean": "torso lean", "head_x": "head horizontal",
     "head_y": "head height", "stance_width": "stance width", "lead_knee_ang": "lead knee bend",
     "still_seconds": "time held in the set", "onset_time": "time before leg lift",
+    "elbow_spread": "elbow spread", "hand_motion_mean": "hand/glove motion (re-grip)",
+    "hand_motion_peaks": "re-grip bursts", "hand_bright_frac": "bright pixels in glove (ball showing)",
+    "throw_wrist_travel": "throwing-wrist travel",
 }
 
 
