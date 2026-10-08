@@ -23,6 +23,12 @@ READABLE = {
 
 
 def describe(col: str) -> str:
+    if col.startswith("set_traj_"):
+        body, _, off = col[len("set_traj_"):].rpartition("_")
+        base = describe(f"set_{body}_mean").replace(" in the set", "")
+        n = int(off)
+        when = f"{-n} frame{'s' if n != -1 else ''} before leg lift" if n < 0 else f"{n} frames into leg lift"
+        return f"{base} {when} (vs his set)"
     phase, _, rest = col.partition("_")
     for key, text in READABLE.items():
         if rest.startswith(key):

@@ -59,15 +59,17 @@ def run(src: str, predictor, target_fps: float = 15.0, buffer_seconds: float = 4
         prev_box = box
         kp = kp.copy(); kp[kp[:, 2] < 0.3, :2] = np.nan
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        buf.append((t, kp, box, pose._hands_patch(gray, kp, box), pose.glove_crop(frame, kp, box)))
+        buf.append((t, kp, box, pose._hands_patch(gray, kp, box), frame))
         if t < cooldown_until or len(buf) < n // 2:
             continue
-        ts, kps, bxs, hs, gl = map(np.array, zip(*buf))
+        ts, kps, bxs, hs, frs = zip(*buf)
+        ts, kps, bxs, hs = map(np.array, (ts, kps, bxs, hs))
         cp = pose.ClipPose(target_fps, ts, kps, bxs, hs, frame.shape[1::-1])
         ph = phases.segment(cp, hand)
         if ph is None or ph.early_end >= len(ts):
             continue  # fire once the early-lift window is complete
-        cp.glove, cp.glove_start = gl[ph.set_start:ph.early_end], ph.set_start
+        cp.glove = pose.smoothed_glove_crops(list(frs), kps, bxs, ph.set_start, ph.early_end)
+        cp.glove_start = ph.set_start
         feats = predictor.features_from_pose(cp)
         if feats is None:
             continue

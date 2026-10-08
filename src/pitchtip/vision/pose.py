@@ -87,10 +87,34 @@ def _hands_patch(gray: np.ndarray, kp: np.ndarray, box: np.ndarray) -> np.ndarra
     return _crop(gray, cx, cy, max(int(0.12 * (box[3] - box[1])), 4), HAND_PATCH)
 
 
-def glove_crop(frame: np.ndarray, kp: np.ndarray, box: np.ndarray) -> np.ndarray:
+def glove_crop(frame: np.ndarray, kp: np.ndarray, box: np.ndarray,
+               center: tuple[float, float] | None = None, height: float | None = None) -> np.ndarray:
     """Wider color crop around the hands: glove, ball, fingers, forearms."""
-    cx, cy = _hands_center(kp)
-    return _crop(frame, cx, cy, max(int(0.16 * (box[3] - box[1])), 6), GLOVE_PATCH)
+    cx, cy = center if center is not None else _hands_center(kp)
+    h = height if height is not None else box[3] - box[1]
+    return _crop(frame, cx, cy, max(int(0.16 * h), 6), GLOVE_PATCH)
+
+
+def smoothed_glove_crops(frames_bgr: list, kps: np.ndarray, boxes: np.ndarray, lo: int, hi: int,
+                         radius: int = 2) -> np.ndarray:
+    """Glove crops for frames lo..hi with the crop center median-filtered over ±radius
+    frames, so one bad wrist detection doesn't crop the face or a leg."""
+    wr = kps[:, [KP["l_wrist"], KP["r_wrist"]], :2]
+    with np.errstate(all="ignore"):
+        centers = np.nanmean(wr, axis=1)
+    heights = boxes[:, 3] - boxes[:, 1]
+    out = []
+    for i in range(lo, hi):
+        a, b = max(0, i - radius), min(len(centers), i + radius + 1)
+        with np.errstate(all="ignore"):
+            c = np.nanmedian(centers[a:b], axis=0)
+            h = np.nanmedian(heights[a:b])
+        f = frames_bgr[i]
+        if f is None or not np.isfinite(c).all() or not np.isfinite(h):
+            out.append(np.zeros((GLOVE_PATCH, GLOVE_PATCH, 3), np.uint8))
+        else:
+            out.append(glove_crop(f, None, None, tuple(c), h))
+    return np.array(out, np.uint8).reshape(-1, GLOVE_PATCH, GLOVE_PATCH, 3)
 
 
 def pick_pitcher(boxes: np.ndarray, frame_h: int, prev_box: np.ndarray | None) -> int | None:
@@ -195,7 +219,7 @@ def extract(clip: Path, hand: str | None = None, target_fps: float = 15.0,
             if kp is None:
                 kps.append(np.full((17, 3), np.nan)); bxs.append(np.full(4, np.nan))
                 hands.append(np.zeros((HAND_PATCH, HAND_PATCH), np.uint8))
-                kept.append(np.zeros((GLOVE_PATCH, GLOVE_PATCH, 3), np.uint8))
+                kept.append(None)
                 continue
             seen_cf = True
             prev_box = box
@@ -203,7 +227,7 @@ def extract(clip: Path, hand: str | None = None, target_fps: float = 15.0,
             kp[kp[:, 2] < 0.3, :2] = np.nan
             kps.append(kp); bxs.append(box)
             hands.append(_hands_patch(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), kp, box))
-            kept.append(glove_crop(frame, kp, box))
+            kept.append(frame)
         if hand is not None and len(ts) >= 12:
             ph = phases.segment(_assemble(ts, kps, bxs, hands, size, target_fps), hand)
             if ph is not None and ph.early_end + 2 < len(ts):
@@ -212,7 +236,7 @@ def extract(clip: Path, hand: str | None = None, target_fps: float = 15.0,
     if hand is not None:
         ph = phases.segment(cp, hand)
         if ph is not None:
-            cp.glove = np.array(kept[ph.set_start:ph.early_end], np.uint8)
+            cp.glove = smoothed_glove_crops(kept, cp.kpts, cp.boxes, ph.set_start, ph.early_end)
             cp.glove_start = ph.set_start
     return cp
 

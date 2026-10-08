@@ -140,26 +140,26 @@ class JevBehavior:
             st = {"arsenal_base_rates": {c: round(float(p), 3) for c, p in self.base.items()}}
             if self.variant in ("probs", "probs+knn", "full", "experts"):
                 st["vision_model_probabilities"] = {c: round(float(p), 3) for c, p in zip(self.m.classes, P[i])}
-            if self.variant in ("experts", "full", "trust+full") and EP:
+            if self.variant in ("experts", "full", "trust+full", "ensemble") and EP:
                 st["expert_opinions"] = {
                     {"body": "body position & movement model", "glove": "glove/hands appearance model",
                      "linear": "simple posture model"}[n]: {c: round(float(p), 3) for c, p in zip(self.m.classes, EP[n][i])}
                     for n in EP}
                 if getattr(self.m, "expert_weights", None):
                     st["expert_reliability_for_this_pitcher"] = {n: float(w) for n, w in self.m.expert_weights.items()}
-            if self.variant in ("trust", "trust+full"):
+            if self.variant in ("trust", "trust+full", "ensemble"):
                 st["vision_model_probabilities"] = {c: round(float(p), 3) for c, p in zip(self.m.classes, P[i])}
                 st["vision_model_confidence"] = round(float(P[i].max()), 3)
                 st["vision_model_track_record_on_unseen_games"] = {
                     "by_confidence": getattr(self.m, "reliability", {}),
                     "accuracy_when_it_calls": getattr(self.m, "per_call", {})}
-            if self.variant in ("knn", "probs+knn", "full", "trust", "trust+full"):
+            if self.variant in ("knn", "probs+knn", "full", "trust", "trust+full", "ensemble"):
                 nn = np.argsort(-sims[i])[: self.k]
                 votes = pd.Series(self.y[nn]).value_counts()
                 st["most_similar_past_deliveries"] = {
                     "k": self.k, "pitch_counts": {c: int(n) for c, n in votes.items()},
                     "closest_5": [str(self.y[j]) for j in nn[:5]]}
-            if self.variant in ("tells", "full", "trust+full") and self.tcols:
+            if self.variant in ("tells", "full", "trust+full", "ensemble") and self.tcols:
                 z = (df.iloc[i][self.tcols].to_numpy(np.float64) - self.tmu) / self.tsd
                 st["known_tells"] = [
                     {"tell": t, "this_pitch_reading_z": round(float(v), 2)}
@@ -167,9 +167,22 @@ class JevBehavior:
             out.append(st)
         return out
 
+    ENSEMBLE_QUESTIONS = {
+        "overall": BEHAVIOR_INSTRUCTIONS,
+        "by_models": ("Which pitch is coming? Rely mainly on vision_model_probabilities and "
+                      "expert_opinions, trusting them as far as their track record supports."),
+        "by_similar": ("Which pitch is coming? Rely mainly on most_similar_past_deliveries: "
+                       "what did this pitcher throw when his set position looked like this?"),
+        "by_tells": ("Which pitch is coming? Rely mainly on known_tells and this pitch's "
+                     "readings; a strongly deviating reading on a reliable tell is decisive."),
+    }
+
     async def predict(self, states: list[dict], concurrency: int = 16) -> list[dict]:
         from typesafe_sdk import AsyncTypeSafeClient, Choice
-        q = Choice(instructions=BEHAVIOR_INSTRUCTIONS, criteria=self.criteria)
+        if self.variant == "ensemble":
+            qs = {k: Choice(instructions=v, criteria=self.criteria) for k, v in self.ENSEMBLE_QUESTIONS.items()}
+        else:
+            qs = {"pitch": Choice(instructions=BEHAVIOR_INSTRUCTIONS, criteria=self.criteria)}
         sem = asyncio.Semaphore(concurrency)
         kw = {"model": self.jev_model} if self.jev_model else {}
 
@@ -178,15 +191,16 @@ class JevBehavior:
                 t0 = time.perf_counter()
                 for attempt in range(3):
                     try:
-                        r = await client.system_one(state=st, questions={"pitch": q}, **kw)
+                        r = await client.system_one(state=st, questions=qs, **kw)
                         break
                     except Exception:
                         if attempt == 2:
                             raise
                         await asyncio.sleep(1 + attempt)
-                a = r.choices["pitch"]
-                return {"choice": a.choice, "confidence": a.confidence,
-                        "probabilities": dict(a.probabilities),
+                probs = {c: float(np.mean([r.choices[k].probabilities.get(c, 0) for k in qs]))
+                         for c in self.criteria}
+                best = max(probs, key=probs.get)
+                return {"choice": best, "confidence": probs[best], "probabilities": probs,
                         "latency_s": time.perf_counter() - t0,
                         "approx_input_tokens": len(json.dumps(st)) // 4}
 

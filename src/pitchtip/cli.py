@@ -246,6 +246,42 @@ def rolling(keys: list[str], mode: str = "fb", variant: str = "probs+knn",
 
 
 @app.command()
+def patterns(mode: str = "fb", q: float = 0.01, out: str = "data/patterns.csv"):
+    """League-wide view: which tell families recur across pitchers (significant at FDR q)."""
+    import re
+    from pitchtip import config
+    from pitchtip.tips import describe, find_tells
+    rows = []
+    for f in sorted(config.FEATURES_DIR.glob("*_emb.npy")):
+        pq = pd.read_parquet(config.FEATURES_DIR / f"{f.name[:-len('_emb.npy')]}.parquet")
+        key = dataset.dataset_key(pq.pitcher_name.iloc[0], sorted({int(d[:4]) for d in pq.date}))
+        df, _ = dataset.load_features(key)
+        y = make_labels(df.pitch_type, mode)
+        keep = (y != "OTHER").to_numpy()
+        t = find_tells(df[keep].reset_index(drop=True), y[keep].reset_index(drop=True), top=40)
+        t = t[t.q < q]
+        for r in t.itertuples():
+            fam = re.sub(r"^(set_traj_|set_|early_)", "", r.feature)
+            fam = re.sub(r"_(mean|std|delta|[+-]\d+)$", "", fam)
+            when = ("trajectory" if "traj" in r.feature else "early lift" if r.feature.startswith("early_")
+                    else "set")
+            rows.append({"pitcher": key, "family": fam, "when": when, "feature": r.feature,
+                         "auc": r.auc, "q": r.q, "pitch": r.pitch, "tell": r.tell})
+    t = pd.DataFrame(rows)
+    t.to_csv(out, index=False)
+    n_p = t.pitcher.nunique()
+    agg = (t.groupby("family").agg(pitchers=("pitcher", "nunique"),
+                                   mean_strength=("auc", lambda a: float(np.mean(np.abs(a - 0.5)) + 0.5)))
+           .sort_values(["pitchers", "mean_strength"], ascending=False))
+    typer.echo(f"{n_p} pitcher-seasons with ≥1 significant tell (q<{q})\n")
+    typer.echo(agg.to_string())
+    typer.echo("\nWhen tells appear:\n" + t.groupby("when").pitcher.nunique().to_string())
+    typer.echo("\nStrongest tell per pitcher:")
+    for k, g in t.sort_values("q").groupby("pitcher"):
+        typer.echo(f"  {k:28s} {g.iloc[0].tell}")
+
+
+@app.command()
 def train(pitcher: str, mode: str = "type", per_game: bool = True):
     """Fit the local model on all games and save it for live use."""
     from pitchtip.models import local
