@@ -24,6 +24,7 @@ broadcast clip / stream
 | Yu Darvish 2017 | 68.2% | **69.9%** | — |
 | Ryan Helsley 2025 (documented tip) | 53.6% | **69.1%** | 85% |
 | Carlos Rodón 2025 | 52.2% | **68.2%** | 82% |
+| Max Scherzer 2025 (documented tip) | 52.1% | **65.7%** | 83% |
 | Jesús Luzardo 2025 | 58.1% | **62.7%** | 79% |
 | Zac Gallen 2025 | 55.3% | **61.4%** | 78% |
 

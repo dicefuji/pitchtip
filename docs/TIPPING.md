@@ -174,6 +174,10 @@ Rolling deployment eval with YOLO11x, Jev with `auto` evidence selection:
 | Darvish 2017 | 475 | 68.2% | 70.3% | **69.9%** |
 | Helsley 2025 | 375 | 53.6% | 69.6% | **69.1%** |
 | Rodón 2025 | 525 | 52.2% | 67.0% | **68.2%** |
+| Scherzer 2025 (documented CH grip) | 530 | 52.1% | 66.4% | **65.7%** |
+| Luzardo 2025 (documented tip) | 1002 | 58.1% | 62.6% | **62.7%** |
+| Gallen 2025 | 474 | 55.3% | 62.0% | **61.4%** |
+| Crochet 2025 | 480 | 74.6% | 74.0% | 74.4% (gated top 25%: 85.8%) |
 
 Gating Jev's calls by the calibrated vision model's belief in the call, the top quarter of calls
 are right 82–94% of the time (Glasnow 94%, Fried 88%, Peralta 86%, Helsley 85%, Rodón 82%).
