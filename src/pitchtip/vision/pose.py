@@ -6,7 +6,7 @@ largest detected person while the shot is on the CF view. Frames on any other sh
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import cv2
@@ -19,7 +19,8 @@ KP = {
     "l_wrist": 9, "r_wrist": 10, "l_hip": 11, "r_hip": 12,
     "l_knee": 13, "r_knee": 14, "l_ankle": 15, "r_ankle": 16,
 }
-HAND_PATCH = 24  # side of the grayscale hands/glove patch kept per frame
+HAND_PATCH = 24   # grayscale hands/glove patch kept for every frame
+GLOVE_PATCH = 64  # color glove crop kept for the set + early-lift window
 
 _model = None
 _device = None
@@ -43,33 +44,53 @@ class ClipPose:
     boxes: np.ndarray     # (T, 4) x1, y1, x2, y2
     hands: np.ndarray     # (T, HAND_PATCH, HAND_PATCH) uint8 grayscale glove/hands crop
     frame_size: tuple[int, int]
+    # Color glove crops (N, GLOVE_PATCH, GLOVE_PATCH, 3) BGR for frames glove_start..+N.
+    glove: np.ndarray = field(default_factory=lambda: np.zeros((0, GLOVE_PATCH, GLOVE_PATCH, 3), np.uint8))
+    glove_start: int = 0
 
     def save(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         np.savez_compressed(path, fps=self.fps, t=self.t, kpts=self.kpts, boxes=self.boxes,
-                            hands=self.hands, frame_size=np.array(self.frame_size))
+                            hands=self.hands, frame_size=np.array(self.frame_size),
+                            glove=self.glove, glove_start=self.glove_start)
 
     @classmethod
     def load(cls, path: Path) -> "ClipPose":
         z = np.load(path)
+        extra = {"glove": z["glove"], "glove_start": int(z["glove_start"])} if "glove" in z else {}
         return cls(float(z["fps"]), z["t"], z["kpts"], z["boxes"], z["hands"],
-                   tuple(int(v) for v in z["frame_size"]))
+                   tuple(int(v) for v in z["frame_size"]), **extra)
+
+
+def _hands_center(kp: np.ndarray) -> tuple[float, float]:
+    wrists = kp[[KP["l_wrist"], KP["r_wrist"]], :2]
+    if not np.isfinite(wrists).any():
+        return np.nan, np.nan
+    return tuple(np.nanmean(wrists, axis=0))
+
+
+def _crop(img: np.ndarray, cx: float, cy: float, r: int, size: int) -> np.ndarray:
+    shape = (size, size) + img.shape[2:]
+    if not np.isfinite(cx):
+        return np.zeros(shape, np.uint8)
+    y1, y2 = int(max(cy - r, 0)), int(min(cy + r, img.shape[0]))
+    x1, x2 = int(max(cx - r, 0)), int(min(cx + r, img.shape[1]))
+    c = img[y1:y2, x1:x2]
+    if c.size == 0:
+        return np.zeros(shape, np.uint8)
+    return cv2.resize(c, (size, size), interpolation=cv2.INTER_AREA)
 
 
 def _hands_patch(gray: np.ndarray, kp: np.ndarray, box: np.ndarray) -> np.ndarray:
     """Crop around the midpoint of both wrists (where the glove sits in the set)."""
-    h = box[3] - box[1]
-    wrists = kp[[KP["l_wrist"], KP["r_wrist"]], :2]
-    cx, cy = np.nanmean(wrists, axis=0)
-    if not np.isfinite(cx):
-        return np.zeros((HAND_PATCH, HAND_PATCH), np.uint8)
-    r = max(int(0.12 * h), 4)
-    y1, y2 = int(max(cy - r, 0)), int(min(cy + r, gray.shape[0]))
-    x1, x2 = int(max(cx - r, 0)), int(min(cx + r, gray.shape[1]))
-    crop = gray[y1:y2, x1:x2]
-    if crop.size == 0:
-        return np.zeros((HAND_PATCH, HAND_PATCH), np.uint8)
-    return cv2.resize(crop, (HAND_PATCH, HAND_PATCH), interpolation=cv2.INTER_AREA)
+    cx, cy = _hands_center(kp)
+    return _crop(gray, cx, cy, max(int(0.12 * (box[3] - box[1])), 4), HAND_PATCH)
+
+
+def glove_crop(frame: np.ndarray, kp: np.ndarray, box: np.ndarray) -> np.ndarray:
+    """Wider color crop around the hands: glove, ball, fingers, forearms."""
+    cx, cy = _hands_center(kp)
+    return _crop(frame, cx, cy, max(int(0.16 * (box[3] - box[1])), 6), GLOVE_PATCH)
 
 
 def pick_pitcher(boxes: np.ndarray, frame_h: int, prev_box: np.ndarray | None) -> int | None:
@@ -107,25 +128,27 @@ def frames(source, target_fps: float = 15.0, max_seconds: float | None = 8.0):
     step = max(int(round(fps / target_fps)), 1)
     i = 0
     while True:
-        ok, frame = cap.read()
+        if i % step == 0:
+            ok, frame = cap.read()
+        else:
+            ok = cap.grab()  # skip decode of frames we don't use
+            frame = None
         if not ok:
             break
         t = i / fps
         if max_seconds is not None and t > max_seconds:
             break
-        if i % step == 0:
+        if frame is not None:
             yield t, frame
         i += 1
     cap.release()
 
 
-def pose_frame(frame: np.ndarray, prev_box: np.ndarray | None, conf: float = 0.3):
-    """Run pose on one frame; returns (kpts (17,3), box (4,)) for the pitcher or (None, None)."""
-    res = get_model()(frame, verbose=False, conf=conf, device=_device)[0]
+def _select(res, frame_h: int, prev_box: np.ndarray | None):
     if res.keypoints is None or len(res.boxes) == 0:
         return None, None
     boxes = res.boxes.xyxy.cpu().numpy()
-    idx = pick_pitcher(boxes, frame.shape[0], prev_box)
+    idx = pick_pitcher(boxes, frame_h, prev_box)
     if idx is None:
         return None, None
     xy = res.keypoints.xy.cpu().numpy()[idx]
@@ -134,27 +157,68 @@ def pose_frame(frame: np.ndarray, prev_box: np.ndarray | None, conf: float = 0.3
     return np.concatenate([xy, c[:, None]], axis=1), boxes[idx]
 
 
-def extract(clip: Path, target_fps: float = 15.0, max_seconds: float = 8.0) -> ClipPose:
-    ts, kps, bxs, hands = [], [], [], []
-    prev_gray, prev_box, size, seen_cf = None, None, (0, 0), False
-    for t, frame in frames(clip, target_fps, max_seconds):
-        size = (frame.shape[1], frame.shape[0])
-        gray = cv2.cvtColor(cv2.resize(frame, (320, 180)), cv2.COLOR_BGR2GRAY)
-        if seen_cf and is_hard_cut(prev_gray, gray):
-            break  # first cut after the CF view = end of the pitch shot
-        prev_gray = gray
-        kp, box = pose_frame(frame, prev_box)
-        ts.append(t)
-        if kp is None:
-            kps.append(np.full((17, 3), np.nan)); bxs.append(np.full(4, np.nan))
-            hands.append(np.zeros((HAND_PATCH, HAND_PATCH), np.uint8))
-            continue
-        seen_cf = True
-        prev_box = box
-        kp = kp.copy()
-        kp[kp[:, 2] < 0.3, :2] = np.nan
-        kps.append(kp); bxs.append(box)
-        hands.append(_hands_patch(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), kp, box))
+def pose_frame(frame: np.ndarray, prev_box: np.ndarray | None, conf: float = 0.3):
+    """Run pose on one frame; returns (kpts (17,3), box (4,)) for the pitcher or (None, None)."""
+    res = get_model()(frame, verbose=False, conf=conf, device=_device)[0]
+    return _select(res, frame.shape[0], prev_box)
+
+
+def extract(clip: Path, hand: str | None = None, target_fps: float = 15.0,
+            max_seconds: float = 8.0, batch: int = 8) -> ClipPose:
+    """Pose-track the pitcher. With `hand` given, stops as soon as the early-lift window
+    is complete and keeps color glove crops for the set + early-lift frames.
+    Frames are run through the pose model in batches for GPU efficiency."""
+    from pitchtip.vision import phases
+
+    model = get_model()
+    ts, kps, bxs, hands, kept = [], [], [], [], []
+    prev_gray, prev_box, size, seen_cf, done = None, None, (0, 0), False, False
+    it = frames(clip, target_fps, max_seconds)
+    while not done:
+        chunk = []
+        for t, frame in it:
+            chunk.append((t, frame))
+            if len(chunk) == batch:
+                break
+        if not chunk:
+            break
+        results = model([f for _, f in chunk], verbose=False, conf=0.3, device=_device)
+        for (t, frame), res in zip(chunk, results):
+            size = (frame.shape[1], frame.shape[0])
+            gray = cv2.cvtColor(cv2.resize(frame, (320, 180)), cv2.COLOR_BGR2GRAY)
+            if seen_cf and is_hard_cut(prev_gray, gray):
+                done = True  # first cut after the CF view = end of the pitch shot
+                break
+            prev_gray = gray
+            kp, box = _select(res, frame.shape[0], prev_box)
+            ts.append(t)
+            if kp is None:
+                kps.append(np.full((17, 3), np.nan)); bxs.append(np.full(4, np.nan))
+                hands.append(np.zeros((HAND_PATCH, HAND_PATCH), np.uint8))
+                kept.append(np.zeros((GLOVE_PATCH, GLOVE_PATCH, 3), np.uint8))
+                continue
+            seen_cf = True
+            prev_box = box
+            kp = kp.copy()
+            kp[kp[:, 2] < 0.3, :2] = np.nan
+            kps.append(kp); bxs.append(box)
+            hands.append(_hands_patch(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), kp, box))
+            kept.append(glove_crop(frame, kp, box))
+        if hand is not None and len(ts) >= 12:
+            ph = phases.segment(_assemble(ts, kps, bxs, hands, size, target_fps), hand)
+            if ph is not None and ph.early_end + 2 < len(ts):
+                done = True
+    cp = _assemble(ts, kps, bxs, hands, size, target_fps)
+    if hand is not None:
+        ph = phases.segment(cp, hand)
+        if ph is not None:
+            cp.glove = np.array(kept[ph.set_start:ph.early_end], np.uint8)
+            cp.glove_start = ph.set_start
+    return cp
+
+
+def _assemble(ts, kps, bxs, hands, size, target_fps) -> ClipPose:
     eff_fps = (len(ts) - 1) / (ts[-1] - ts[0]) if len(ts) > 1 else target_fps
     return ClipPose(eff_fps, np.array(ts), np.array(kps).reshape(-1, 17, 3),
-                    np.array(bxs).reshape(-1, 4), np.array(hands).reshape(-1, HAND_PATCH, HAND_PATCH), size)
+                    np.array(bxs).reshape(-1, 4),
+                    np.array(hands).reshape(-1, HAND_PATCH, HAND_PATCH), size)

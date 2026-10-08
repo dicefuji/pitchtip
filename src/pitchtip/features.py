@@ -75,7 +75,6 @@ def clip_features(cp: ClipPose, ph: Phases, hand: str | None) -> tuple[dict[str,
             break
         n += 1
     feats["set_still_seconds"] = n / cp.fps
-    feats["onset_time"] = float(cp.t[o])
     # Glove-region appearance over the set, from the stored grayscale hand patches:
     #   motion energy  -> re-gripping / fidgeting in the glove (Darvish, Strasburg)
     #   bright fraction -> white ball or fingers showing in an open glove (Schmidt, Luzardo)

@@ -18,14 +18,30 @@ app = typer.Typer(add_completion=False, help="Find pitcher tips from broadcast v
 @app.command()
 def fetch(pitcher: str, season: list[int] = typer.Option(..., help="Season(s), repeatable"),
           game_type: list[str] = typer.Option(["R"], help="R=regular, F/D/L/W=postseason rounds"),
-          max_games: Optional[int] = None, limit: Optional[int] = None,
-          no_download: bool = False, workers: int = 4):
+          max_games: Optional[int] = None, no_download: bool = False, workers: int = 6):
     """Pull pitch labels (MLB Stats API) and download clips (Baseball Savant)."""
-    df = dataset.fetch(pitcher, season, max_games, game_type, not no_download, workers, limit)
+    df = dataset.fetch(pitcher, season, max_games, game_type, not no_download, workers)
     typer.echo(f"{len(df)} pitches over {df.game_pk.nunique()} games")
     typer.echo(df.pitch_type.value_counts().to_string())
-    if "has_clip" in df:
-        typer.echo(f"clips: {df.has_clip.sum()}/{len(df)}")
+
+
+@app.command()
+def scan(pitchers: list[str] = typer.Argument(..., help='"Name:season[:max_games]" entries'),
+         game_type: list[str] = typer.Option(["R"]), workers: int = 8):
+    """Download + pose-extract many pitcher-seasons concurrently."""
+    for spec in pitchers:
+        name, season, *mg = spec.split(":")
+        df = dataset.scan(name, [int(season)], int(mg[0]) if mg else None, game_type, workers)
+        typer.echo(f"{name} {season}: features for {len(df)} pitches")
+
+
+@app.command()
+def embed(keys: list[str]):
+    """DINOv2 glove-region embeddings for extracted datasets."""
+    from pitchtip.vision import embed as emb
+    for k in keys:
+        a = emb.build(k)
+        typer.echo(f"{k}: {a.shape}")
 
 
 @app.command()
@@ -104,6 +120,70 @@ def eval(pitcher: str, mode: str = typer.Option("type", help="type | fb (fastbal
 
 
 @app.command()
+def tune(keys: list[str], mode: str = "type", no_jev: bool = False, no_emb: bool = False,
+         variants: str = "probs,knn,probs+knn,full", out: Optional[str] = None):
+    """Behavior-only: local model vs Jev variants (chosen on val games, scored on test games)."""
+    from pitchtip import experiment
+    allres = []
+    for k in keys:
+        r = experiment.run(k, mode, tuple(variants.split(",")), not no_emb, not no_jev)
+        allres.append(r)
+        typer.echo(json.dumps(r, indent=1, default=float))
+    if out:
+        with open(out, "a") as f:
+            for r in allres:
+                f.write(json.dumps(r, default=float) + "\n")
+
+
+@app.command()
+def demo(key: str, game: str = typer.Option("last", help="gamePk or 'last'"), n: int = 30,
+         mode: str = "type", jev: bool = True, from_video: bool = False,
+         sheet: str = "data/demo.jpg"):
+    """Replay one held-out game: call each pitch from video behavior only, in order."""
+    import cv2
+    from pitchtip import config
+    from pitchtip.config import slug
+    from pitchtip.predictor import Predictor
+    from pitchtip.vision import pose
+    pf = pd.read_parquet(config.FEATURES_DIR / f"{slug(key)}.parquet")
+    games = pf.drop_duplicates("game_pk").sort_values("date")
+    gpk = int(games.game_pk.iloc[-1]) if game == "last" else int(game)
+    gdate = games.set_index("game_pk").date[gpk]
+    prior = set(games[games.date < gdate].game_pk)
+    pr = Predictor(key, mode, use_jev=jev).fit(prior)
+    rows = pf[pf.game_pk == gpk].sort_values(["at_bat", "pitch_number"]).head(n)
+    hits, tiles = 0, []
+    typer.echo(f"{key} game {gpk} ({gdate}); trained on {len(prior)} earlier games")
+    for r in rows.itertuples():
+        npz = config.POSE_DIR / slug(r.pitcher_name) / f"{r.play_id}.npz"
+        clip = config.CLIPS_DIR / slug(r.pitcher_name) / f"{r.play_id}.mp4"
+        cp = pose.extract(clip, pr.hand) if from_video or not npz.exists() else pose.ClipPose.load(npz)
+        feats = pr.features_from_pose(cp)
+        if feats is None:
+            continue
+        out = pr.predict_features(*feats)
+        truth = make_labels(pd.Series([r.pitch_type]), mode).iloc[0]
+        ok = out["call"] == truth
+        hits += ok
+        top = sorted((out.get("jev") or out["vision"]).items(), key=lambda kv: -kv[1])[:3]
+        typer.echo(f"  inn {r.inning} AB {r.at_bat:>2} p{r.pitch_number}:  call {out['call']:>4} "
+                   f"({out['confidence']:.0%})  actual {truth:>4}  {'✓' if ok else '✗'}   "
+                   + " ".join(f"{k}:{v:.0%}" for k, v in top))
+        if len(cp.glove):
+            g = cv2.resize(cp.glove[max(0, len(cp.glove) - 8)], (160, 160))
+            cv2.putText(g, f"call {out['call']}", (4, 18), 0, 0.5, (0, 255, 255), 1)
+            cv2.putText(g, f"real {truth}", (4, 152), 0, 0.5, (0, 255, 0) if ok else (0, 0, 255), 1)
+            tiles.append(g)
+    k = len(rows)
+    typer.echo(f"accuracy {hits}/{k} = {hits / max(k, 1):.0%}")
+    if tiles:
+        while len(tiles) % 6:
+            tiles.append(np.zeros_like(tiles[0]))
+        cv2.imwrite(sheet, np.vstack([np.hstack(tiles[i:i + 6]) for i in range(0, len(tiles), 6)]))
+        typer.echo(sheet)
+
+
+@app.command()
 def train(pitcher: str, mode: str = "type", per_game: bool = True):
     """Fit the local model on all games and save it for live use."""
     from pitchtip.models import local
@@ -120,8 +200,8 @@ def live(source: str, pitcher: str, mode: str = "type", log: Optional[str] = Non
     from pitchtip.data.mlb import find_pitcher
     from pitchtip.models import local
     from pitchtip import live as live_mod
-    p = find_pitcher(pitcher)
-    m = local.load(p["name"], mode)
+    p = find_pitcher(pitcher.rsplit(" ", 1)[0] if pitcher[-4:].isdigit() else pitcher)
+    m = local.load(pitcher, mode)
     live_mod.run(source, p["hand"], m, p["name"], log=Path(log) if log else None)
 
 

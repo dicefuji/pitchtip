@@ -18,6 +18,7 @@ dependencies = [
     "scikit-learn>=1.9.1",
     "scipy>=1.17.1",
     "tqdm>=4.70.1",
+    "transformers>=5.19.0",
     "typer>=0.27.3",
     "typesafe-sdk>=0.7.2",
     "ultralytics>=8.4.174",

@@ -96,3 +96,83 @@ class JevDecider:
         async with AsyncTypeSafeClient() as client:
             vis = vision or [None] * len(rows)
             return await asyncio.gather(*(one(client, r, v) for (_, r), v in zip(rows.iterrows(), vis)))
+
+
+BEHAVIOR_INSTRUCTIONS = (
+    "Predict the pitch a baseball pitcher is about to throw using ONLY his body language "
+    "before release (set position and the start of the leg lift): glove/hand position, grip "
+    "motion, elbows, posture. Evidence: (1) a vision model's calibrated probabilities, "
+    "(2) the pitches thrown on the most visually similar past deliveries, (3) this "
+    "pitcher's known tells with today's readings. Weigh agreeing evidence; when evidence "
+    "is weak, stay close to the arsenal base rates."
+)
+
+
+class JevBehavior:
+    """Jev over behavior-only evidence produced by a BehaviorModel."""
+
+    def __init__(self, model, train_df, train_hands, train_emb, y_train, tells=None,
+                 k: int = 25, variant: str = "full", jev_model: str | None = None):
+        self.m, self.variant, self.k, self.jev_model = model, variant, k, jev_model
+        self.base = y_train.value_counts(normalize=True)
+        X = model._views(train_df, train_hands, train_emb)
+        self.mu, self.sd = X.mean(0), X.std(0) + 1e-6
+        Z = (X - self.mu) / self.sd
+        self.Z = Z / (np.linalg.norm(Z, axis=1, keepdims=True) + 1e-9)
+        self.y = y_train.to_numpy()
+        self.tells = tells if tells is not None else pd.DataFrame(columns=["feature", "tell"])
+        self.tcols = self.tells.feature.tolist()[:6]
+        if self.tcols:
+            T = train_df[self.tcols].to_numpy(np.float64)
+            self.tmu, self.tsd = np.nanmean(T, 0), np.nanstd(T, 0) + 1e-9
+        self.criteria = {c: f"{c} ({self.base[c]:.0%} of this pitcher's pitches)" for c in self.base.index}
+
+    def evidence(self, df, hands, emb) -> list[dict]:
+        P = self.m.predict_proba(df, hands, emb)
+        X = (self.m._views(df, hands, emb) - self.mu) / self.sd
+        X /= np.linalg.norm(X, axis=1, keepdims=True) + 1e-9
+        sims = X @ self.Z.T
+        out = []
+        for i in range(len(df)):
+            st = {"arsenal_base_rates": {c: round(float(p), 3) for c, p in self.base.items()}}
+            if self.variant in ("probs", "probs+knn", "full"):
+                st["vision_model_probabilities"] = {c: round(float(p), 3) for c, p in zip(self.m.classes, P[i])}
+            if self.variant in ("knn", "probs+knn", "full"):
+                nn = np.argsort(-sims[i])[: self.k]
+                votes = pd.Series(self.y[nn]).value_counts()
+                st["most_similar_past_deliveries"] = {
+                    "k": self.k, "pitch_counts": {c: int(n) for c, n in votes.items()},
+                    "closest_5": [str(self.y[j]) for j in nn[:5]]}
+            if self.variant in ("tells", "full") and self.tcols:
+                z = (df.iloc[i][self.tcols].to_numpy(np.float64) - self.tmu) / self.tsd
+                st["known_tells"] = [
+                    {"tell": t, "this_pitch_reading_z": round(float(v), 2)}
+                    for t, v in zip(self.tells.tell.tolist()[:6], np.nan_to_num(z))]
+            out.append(st)
+        return out
+
+    async def predict(self, states: list[dict], concurrency: int = 16) -> list[dict]:
+        from typesafe_sdk import AsyncTypeSafeClient, Choice
+        q = Choice(instructions=BEHAVIOR_INSTRUCTIONS, criteria=self.criteria)
+        sem = asyncio.Semaphore(concurrency)
+        kw = {"model": self.jev_model} if self.jev_model else {}
+
+        async def one(client, st):
+            async with sem:
+                t0 = time.perf_counter()
+                for attempt in range(3):
+                    try:
+                        r = await client.system_one(state=st, questions={"pitch": q}, **kw)
+                        break
+                    except Exception:
+                        if attempt == 2:
+                            raise
+                        await asyncio.sleep(1 + attempt)
+                a = r.choices["pitch"]
+                return {"choice": a.choice, "confidence": a.confidence,
+                        "probabilities": dict(a.probabilities),
+                        "latency_s": time.perf_counter() - t0,
+                        "approx_input_tokens": len(json.dumps(st)) // 4}
+
+        async with AsyncTypeSafeClient() as client:
+            return await asyncio.gather(*(one(client, s) for s in states))
