@@ -30,7 +30,7 @@ def get_model(weights: str | None = None):
     global _model, _device
     if _model is None:
         import os
-        weights = weights or os.environ.get("PITCHTIP_POSE_WEIGHTS", "yolo11l-pose.pt")
+        weights = weights or os.environ.get("PITCHTIP_POSE_WEIGHTS", "yolo11x-pose.pt")
         import torch
         from ultralytics import YOLO
         _model = YOLO(weights)

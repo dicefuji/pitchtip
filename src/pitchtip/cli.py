@@ -282,6 +282,24 @@ def patterns(mode: str = "fb", q: float = 0.01, out: str = "data/patterns.csv"):
 
 
 @app.command()
+def report(path: str = "data/rolling_results.jsonl"):
+    """Latest rolling (deployment-style) result per pitcher and mode, Jev vs local vs base."""
+    rows = {}
+    for line in open(path):
+        r = json.loads(line)
+        rows[(r["key"], r["mode"])] = r
+    out = []
+    for (k, mode), r in sorted(rows.items(), key=lambda kv: -kv[1].get("jev", kv[1]["local"])["accuracy"]):
+        j, l = r.get("jev"), r["local"]
+        out.append({"pitcher": k, "mode": mode, "n": l["n"], "base": l["base_rate"], "local": l["accuracy"],
+                    "jev": j["accuracy"] if j else None,
+                    "jev_lift": round(j["accuracy"] - l["base_rate"], 3) if j else None,
+                    "jev_top50": j["selective_accuracy"]["top50pct"] if j else None,
+                    "variant": j.get("variant") if j else None})
+    typer.echo(pd.DataFrame(out).to_string(index=False))
+
+
+@app.command()
 def train(pitcher: str, mode: str = "type", per_game: bool = True):
     """Fit the local model on all games and save it for live use."""
     from pitchtip.models import local
