@@ -181,6 +181,7 @@ Rolling deployment eval with YOLO11x, Jev with `auto` evidence selection:
 | Yamamoto 2024 (documented tip, postseason) | 482 | 53.1% | 61.0% | **59.5%** |
 | Greene 2025 (alleged tip, WC G1) | 615 | 50.7% | 62.8% | **62.0%** |
 | Kikuchi 2025 (no report; near-control) | 448 | 62.3% | 64.5% | 63.8% |
+| Webb 2025 (was last on the YOLO11s board, AUC 0.58) | 472 | 55.7% | 68.6% | **68.2%** |
 | Strasburg 2019 (documented tip, WS G6) | 676 | 54.1% | 70.1% | — |
 | Glasnow 2020 (after his fix) | 324 | 63.9% | 72.8% | **74.4%** (lift +10.5 vs +17.1 in 2019) |
 | Luzardo 2025 (documented tip) | 1002 | 58.1% | 62.6% | **62.7%** |
