@@ -152,3 +152,36 @@ report, but the gap is small.
 - A Jev multi-question ensemble: probabilities stayed polarized, with no accuracy gain.
 - `onset_time` was removed as a leak. Savant cuts clips relative to release, so it encodes
   delivery length.
+
+## YOLO11x results (current default pose model)
+Pose-model sweep on Glasnow 2019, rolling, FB vs offspeed (local model):
+
+| pose model | AUC | acc (base 71%) | s/clip |
+|---|---|---|---|
+| YOLO11s | 0.78 | 70.8% | 0.6 |
+| YOLO11m | 0.86 | 81.0% | 1.0 |
+| YOLO11l | 0.89 | 83.3% | 1.5 |
+| **YOLO11x** | **0.93** | **88.6%** | 1.9 |
+| YOLO11x on a pitcher crop (384 px) | 0.90 | 85.8% | 1.1 |
+
+Rolling deployment eval with YOLO11x, Jev with `auto` evidence selection:
+
+| pitcher | n | base | local | **Jev** |
+|---|---|---|---|---|
+| Glasnow 2019 | 210 | 71.0% | 88.6% | **88.1%** |
+| Peralta 2025 | 462 | 53.5% | 71.0% | **70.4%** |
+| Darvish 2017 | 475 | 68.2% | 70.3% | **69.9%** |
+| Helsley 2025 | 375 | 53.6% | 69.6% | **69.1%** |
+
+`auto` picks Jev's evidence variant on the most recent training games: plain vision probabilities
+when the signal is weak, plus track record or similar deliveries when it is strong.
+
+### Live replays (continuous video, trained only on earlier games, behavior only)
+| game | called | correct | base |
+|---|---|---|---|
+| Glasnow, 2019 ALDS G5 (YOLO11m) | 35/40 | **94%** | 68% |
+| Glasnow, 2019 ALDS G5 (YOLO11x) | 36/40 | **89%** | 68% |
+| Peralta, 2025-09-22 (YOLO11x) | 66/76 | **70%** | 55% |
+
+Jev's own confidence is polarized: almost every call is ≥75%. When you need to decide which
+calls to act on, gate on the local model's confidence, whose top-quarter calls run 85–96% correct.
