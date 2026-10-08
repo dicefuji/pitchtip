@@ -16,7 +16,21 @@ from pitchtip.tips import find_tells
 from pitchtip.vision import embed
 
 
+SET_ONLY_DROP = ("early_",)
+
+
+def set_only(df: pd.DataFrame, emb):
+    """Keep only what is visible before the leg lift starts: drop early-lift features,
+    post-onset trajectory points and the early-lift half of the glove embedding."""
+    drop = [c for c in df.columns if c.startswith("early_") or (c.startswith("set_traj_") and c.rsplit("_", 1)[1].startswith("+"))]
+    df = df.drop(columns=drop)
+    if emb is not None:
+        emb = np.hstack([emb[:, :768], emb[:, -1:]])
+    return df, emb
+
+
 def load(key: str, mode: str):
+    import os
     df, hands = dataset.load_features(key)
     try:
         emb = embed.load(key, df=df)
@@ -26,6 +40,8 @@ def load(key: str, mode: str):
     keep = (y != "OTHER").to_numpy().copy()
     df, hands, y = df[keep].reset_index(drop=True), hands[keep], y[keep].reset_index(drop=True)
     emb = emb[keep] if emb is not None else None
+    if os.environ.get("PITCHTIP_SET_ONLY") == "1":
+        df, emb = set_only(df, emb)
     return df, hands, emb, y
 
 

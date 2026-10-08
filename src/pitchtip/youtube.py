@@ -25,11 +25,13 @@ COLORS = {"FF": (214, 120, 42), "SI": (214, 120, 42), "FC": (214, 120, 42), "FAS
           "CH": (52, 104, 235), "FS": (52, 104, 235), "CS": (52, 104, 235), "OFFSPEED": (52, 104, 235)}
 
 
-def feed_pitches(game_pk: int, pitcher_id: int) -> pd.DataFrame:
+def feed_pitches(game_pk: int, pitcher_id: int, innings: list[int] | None = None) -> pd.DataFrame:
     feed = _get(f"{API}/v1.1/game/{game_pk}/feed/live")
     rows = []
     for play in feed["liveData"]["plays"]["allPlays"]:
         if play["matchup"]["pitcher"]["id"] != pitcher_id:
+            continue
+        if innings and play["about"]["inning"] not in innings:
             continue
         for ev in play["playEvents"]:
             if ev.get("isPitch") and ev.get("startTime"):
@@ -195,7 +197,7 @@ def cascade_call(predictor, ts, frs, target_fps: float, acc: "AccuratePose | Non
 
 
 def run(video: str, predictor, out_dir: Path, target_fps: float = 15.0, buffer_seconds: float = 4.0,
-        on_call=None):
+        on_call=None, max_t: float | None = None):
     """Detect every leg lift in the video and call it; returns list of (call, ClipPose, Phases).
 
     Cascade: a tiny pose model tracks the pitcher on every frame and spots the leg lift,
@@ -210,6 +212,8 @@ def run(video: str, predictor, out_dir: Path, target_fps: float = 15.0, buffer_s
     buf = collections.deque(maxlen=n)
     acc = AccuratePose()
     prev_box, cooldown, i, calls, prev_gray = None, -1.0, 0, [], None
+    standing, since_standing = [], 0      # pre-lift calls made during the set: (output, time)
+    precall = getattr(predictor, "set_only", False)
     hand = predictor.hand
     while cap.grab():
         i += 1
@@ -220,9 +224,11 @@ def run(video: str, predictor, out_dir: Path, target_fps: float = 15.0, buffer_s
             break
         t_read = time.perf_counter()
         t = i / fps
+        if max_t is not None and t > max_t:
+            break
         gray = cv2.cvtColor(cv2.resize(frame, (320, 180)), cv2.COLOR_BGR2GRAY)
         if pose.is_hard_cut(prev_gray, gray):
-            buf.clear(); prev_box = None; acc.reset()  # camera cut: never span two shots
+            buf.clear(); prev_box = None; acc.reset(); standing = []  # camera cut: never span two shots
         prev_gray = gray
         kp, box = pose.pose_frame(frame, prev_box, weights=pose.FAST_WEIGHTS)
         if kp is None:
@@ -234,13 +240,38 @@ def run(video: str, predictor, out_dir: Path, target_fps: float = 15.0, buffer_s
         if t < cooldown:
             continue
         acc.update([(e[0], e[4]) for e in buf])          # keep the big model nearly caught up
-        if len(buf) < n // 2:
+        if len(buf) < (20 if precall else n // 2):
             continue
         fids, ts, kps, bxs, frs = zip(*buf)
         cp_fast = pose.ClipPose(target_fps, np.array(ts), np.array(kps), np.array(bxs),
                                 np.zeros((len(ts), pose.HAND_PATCH, pose.HAND_PATCH), np.uint8), frame.shape[1::-1])
         ph_fast = phases.segment(cp_fast, hand)
-        if ph_fast is None or ph_fast.early_end + 1 >= len(ts):
+        ready_at = (ph_fast.onset + 2) if (ph_fast is not None and precall) \
+            else (ph_fast.early_end + 1 if ph_fast is not None else None)
+        if precall and (ph_fast is None or ph_fast.onset >= len(ts) - 2):
+            # No lift yet: refresh the standing call from the last 1.2 s of the set.
+            since_standing += 1
+            if since_standing >= 4 and len(buf) >= 20:
+                since_standing = 0
+                acc.update([(e[0], e[4]) for e in buf], force=True)
+                kb = [acc.get(f) for f in fids]
+                kp_a, bx_a = np.array([k for k, _ in kb]), np.array([b for _, b in kb])
+                if np.isfinite(bx_a[-18:, 0]).sum() >= 10:
+                    gray_ = [cv2.cvtColor(f, cv2.COLOR_BGR2GRAY) for f in frs]
+                    hs_ = np.array([pose._hands_patch(g, k, b) if np.isfinite(b).all() else
+                                    np.zeros((pose.HAND_PATCH, pose.HAND_PATCH), np.uint8) for g, k, b in zip(gray_, kp_a, bx_a)])
+                    cps = pose.ClipPose(target_fps, np.array(ts), kp_a, bx_a, hs_, frame.shape[1::-1])
+                    on = len(ts) - 1
+                    phs = phases.Phases(on, max(0, on - 18), len(ts),
+                                        float(np.nanmedian(bx_a[-18:, 3] - bx_a[-18:, 1])))
+                    cps.glove = pose.smoothed_glove_crops(list(frs), kp_a, bx_a, phs.set_start, phs.early_end)
+                    cps.glove_start = phs.set_start
+                    try:
+                        so = predictor.predict_features(*predictor.features_at(cps, phs), update=False)
+                        standing.append((so, float(ts[-1])))
+                    except Exception as e:  # keep the stream alive, but say why
+                        print(f"standing call failed at {ts[-1]:.1f}s: {type(e).__name__}: {e}", flush=True)
+        if ready_at is None or ready_at >= len(ts):
             continue
         res = cascade_call(predictor, ts, frs, target_fps, acc, fids)
         cooldown = t + 6.0
@@ -249,7 +280,21 @@ def run(video: str, predictor, out_dir: Path, target_fps: float = 15.0, buffer_s
             continue
         cp, ph, feats = res
         o = predictor.predict_features(*feats)
+        # The tracker confirms a lift ~0.5 s late, so use the latest standing call that was
+        # made strictly before the (accurately located) lift onset.
+        t_on = float(cp.t[ph.onset])
+        before = [x for x in standing if t_on - 2.0 <= x[1] <= t_on - 1 / target_fps]
+        at_lift = {k: o[k] for k in ("call", "trust", "strong")}
+        if precall and before:
+            so, t_so = before[-1]
+            o = {**o, **{k: so[k] for k in ("call", "confidence", "trust", "strong", "vision")}, "jev": so.get("jev")}
+            lead = float(cp.t[ph.onset]) - t_so
+        else:
+            lead = None
+        standing, since_standing = [], 0
         c = {"t": float(cp.t[ph.onset]), **{k: o[k] for k in ("call", "confidence", "trust", "strong", "vision")},
+             "called_before_lift_s": None if lead is None else round(lead, 2),
+             "at_lift": at_lift,
              "jev": o.get("jev"), "idx": len(calls),
              # compute time from the last frame needed until the call is ready
              "decide_s": round(time.perf_counter() - t_read, 3),

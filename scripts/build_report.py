@@ -139,6 +139,34 @@ for d, title, when, yt, blurb in VIDEOS:
   {f'<details class="extra"><summary>{len(extra)} detections with no pitch in the feed (replays, cutaways), not scored</summary><div class="film">{"".join(extra)}</div></details>' if extra else ""}
 </section>''')
 
+# pre-lift (set-only standing call) comparison on the same three innings
+import statistics
+pre_rows, pre_tot, pre_ok, pre_base, pre_leads = [], 0, 0, 0, []
+for (d, title, when, yt, blurb) in VIDEOS:
+    pd_ = Path(d.replace("/yt_", "/ytp_"))
+    if not (pd_ / "calls.json").exists():
+        continue
+    cc = json.loads((pd_ / "calls.json").read_text())
+    mm = [c for c in cc if c["matched"] and c["actual"] in ("FF", "SL")]
+    ok_ = sum(c["call"] == c["actual"] for c in mm)
+    b_ = max(sum(c["actual"] == "FF" for c in mm), sum(c["actual"] == "SL" for c in mm))
+    lead = [c["called_before_lift_s"] for c in mm if c.get("called_before_lift_s") is not None]
+    pre_rows.append(f"<tr><td>{esc(title)}</td><td>{ok_}/{len(mm)}</td><td>{pct(ok_ / len(mm))}</td><td>{pct(b_ / len(mm))}</td><td>{len(lead)}/{len(mm)}</td></tr>")
+    pre_tot += len(mm); pre_ok += ok_; pre_base += b_; pre_leads += lead
+pre_html = ""
+if pre_tot:
+    pre_html = f'''
+<section>
+  <span class="eyebrow">earlier calls</span><h2>Calling it before the leg lift</h2>
+  <p>A call that lands after the lift starts is a real pre-release prediction, but a hitter has no time to use it. In set-only mode, pitchtip keeps a standing call while the pitcher is set. It refreshes about every quarter second from the last 1.2 s of his set position. When the lift begins, the last standing call made <em>before</em> the lift is the prediction. The model is retrained without any lift features.</p>
+  <div class="kpis">
+    <div class="kpi"><span>Pre-lift accuracy, same three innings</span><b>{pct(pre_ok / pre_tot)}</b><small>{pre_ok} of {pre_tot} · base rate {pct(pre_base / pre_tot)}</small></div>
+    <div class="kpi"><span>Called before the lift started</span><b>{len(pre_leads)}/{pre_tot}</b><small>median {statistics.median(pre_leads):.2f} s before the lift (≈1.2–1.6 s before release)</small></div>
+    <div class="kpi"><span>Set-only cost, rolling eval</span><b>≈ −6 pts</b><small>5 most readable pitchers; still +13–19 over base</small></div>
+  </div>
+  <div class="tblwrap"><table><thead><tr><th>inning</th><th>correct</th><th>accuracy</th><th>base</th><th>called pre-lift</th></tr></thead><tbody>{"".join(pre_rows)}</tbody></table></div>
+</section>'''
+
 rows = {}
 for line in open("data/rolling_results.jsonl"):
     r = json.loads(line)
@@ -269,6 +297,8 @@ details summary {{ cursor:pointer; color:var(--muted); font-size:13px }} pre {{ 
   <p>Each column is one detected delivery. The bar is Jev's probability: up for slider, down for four-seam fastball; the dot is the calibrated vision model. Below it: the pitch he actually threw, from the MLB game feed. The model for each video was trained only on games before that date. Each card shows the frame where the leg lift started, the glove crop the model read, and both probability readouts.</p>
   {"".join(sections) or "<p>No runs found.</p>"}
 </section>
+
+{pre_html}
 
 <section class="how">
   <span class="eyebrow">under the hood</span><h2>How Jev makes the call</h2>

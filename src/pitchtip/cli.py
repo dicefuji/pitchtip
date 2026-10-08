@@ -303,7 +303,8 @@ def report(path: str = "data/rolling_results.jsonl"):
 
 @app.command()
 def ytest(video: str, key: str, game: int, out: str = typer.Option(..., help="output dir"),
-          mode: str = "type", variant: str = "probs+knn", label: str = ""):
+          mode: str = "type", variant: str = "probs+knn", label: str = "", set_only: bool = False,
+          innings: Optional[list[int]] = typer.Option(None, help="restrict the feed to the innings shown in the video")):
     """Test on arbitrary broadcast video (e.g. YouTube) and score against the MLB feed."""
     from pathlib import Path
     from pitchtip import config, youtube
@@ -316,11 +317,11 @@ def ytest(video: str, key: str, game: int, out: str = typer.Option(..., help="ou
         import requests
         gdate = requests.get(f"https://statsapi.mlb.com/api/v1.1/game/{game}/feed/live").json()["gameData"]["datetime"]["officialDate"]
     prior = set(pf[pf.date < gdate].game_pk)
-    pr = Predictor(key, mode, use_jev=True, variant=variant).fit(prior)
+    pr = Predictor(key, mode, use_jev=True, variant=variant, set_only=set_only).fit(prior)
     typer.echo(f"{key}: trained on {len(prior)} games before {gdate}; classes {pr.model.classes}")
     od = Path(out)
     calls = youtube.run(video, pr, od)
-    feed = youtube.feed_pitches(game, int(pf.pitcher_id.iloc[0]))
+    feed = youtube.feed_pitches(game, int(pf.pitcher_id.iloc[0]), innings)
     feed["label"] = make_labels(feed.pitch_type, mode) if mode == "fb" else feed.pitch_type.where(
         feed.pitch_type.isin(pr.model.classes), "OTHER")
     off, _ = youtube.align(np.array([c["t"] for c, _, _ in calls]), feed.t.to_numpy())
@@ -333,6 +334,8 @@ def ytest(video: str, key: str, game: int, out: str = typer.Option(..., help="ou
         youtube.render(frame, cp, ph, c | {"jev": c["jev"]}, truth, od / f"call_{i:03d}.jpg",
                        f"{label or key}  t={c['t']:.0f}s" + (f"  {feed.batter.iloc[j]} (count after: {feed['count'].iloc[j]})" if j is not None else ""))
         rows.append({"i": i, "video_t": round(c["t"], 1), "call": c["call"], "trust": round(c["trust"], 3),
+                     "called_before_lift_s": c.get("called_before_lift_s"), "after_onset_s": c.get("after_onset_s"),
+                     "at_lift_call": (c.get("at_lift") or {}).get("call"),
                      "strong": c["strong"], "jev": c["jev"], "vision": c["vision"],
                      "matched": j is not None, "actual": truth,
                      "batter": feed.batter.iloc[j] if j is not None else None,
@@ -347,13 +350,15 @@ def ytest(video: str, key: str, game: int, out: str = typer.Option(..., help="ou
                "calls": len(df), "matched": int(df.matched.sum()), "unmatched_detections": int((~df.matched).sum()),
                "accuracy": round(float(acc), 3), "base_rate": round(float(base), 3),
                "strong_calls": len(st), "strong_accuracy": round(float((st.call == st.actual).mean()), 3) if len(st) else None,
-               "offset_s": round(off, 1)}
+               "offset_s": round(off, 1), "set_only": set_only,
+               "called_before_lift": int(df.called_before_lift_s.notna().sum()) if "called_before_lift_s" in df else 0}
     (od / "summary.json").write_text(json.dumps(summary, indent=1))
     typer.echo(json.dumps(summary, indent=1))
 
 
 @app.command()
-def yrescore(out: str, key: str, game: int, mode: str = "type", label: str = ""):
+def yrescore(out: str, key: str, game: int, mode: str = "type", label: str = "",
+             innings: Optional[list[int]] = typer.Option(None)):
     """Re-align saved YouTube calls with the feed and re-render (no video processing)."""
     from pathlib import Path
     from pitchtip import config, youtube
@@ -362,7 +367,7 @@ def yrescore(out: str, key: str, game: int, mode: str = "type", label: str = "")
     od = Path(out)
     rows = json.loads((od / "calls.json").read_text())
     pf = pd.read_parquet(config.FEATURES_DIR / f"{slug(key)}.parquet")
-    feed = youtube.feed_pitches(game, int(pf.pitcher_id.iloc[0]))
+    feed = youtube.feed_pitches(game, int(pf.pitcher_id.iloc[0]), innings)
     classes = sorted(set(pf.pitch_type.value_counts(normalize=True).loc[lambda v: v >= 0.05].index))
     feed["label"] = feed.pitch_type.where(feed.pitch_type.isin(classes), "OTHER")
     match = youtube.align_dp(np.array([r["video_t"] for r in rows]), feed.t.to_numpy())
@@ -405,7 +410,8 @@ def train(pitcher: str, mode: str = "type", per_game: bool = True):
 def live(source: str, key: str = typer.Argument(..., help='dataset to learn the pitcher from, e.g. "Tyler Glasnow 2019"'),
          mode: str = "type", jev: bool = True, log: Optional[str] = None,
          train_before: Optional[str] = typer.Option(None, help="only learn from games before this date (YYYY-MM-DD)"),
-         variant: str = typer.Option("trust", help="Jev evidence variant")):
+         variant: str = typer.Option("trust", help="Jev evidence variant"),
+         set_only: bool = typer.Option(False, help="call at leg-lift onset from the set alone (earlier, a bit less accurate)")):
     """Call pitches from behavior on a stream URL (yt-dlp) or a recorded video file."""
     from pathlib import Path
     from pitchtip import config, live as live_mod
@@ -415,7 +421,7 @@ def live(source: str, key: str = typer.Argument(..., help='dataset to learn the 
     if train_before:
         pf = pd.read_parquet(config.FEATURES_DIR / f"{slug(key)}.parquet")
         games = set(pf[pf.date < train_before].game_pk)
-    pr = Predictor(key, mode, use_jev=jev, variant=variant).fit(games)
+    pr = Predictor(key, mode, use_jev=jev, variant=variant, set_only=set_only).fit(games)
     typer.echo(f"model ready for {key}: classes {pr.model.classes}")
     live_mod.run(source, pr, log=Path(log) if log else None)
 

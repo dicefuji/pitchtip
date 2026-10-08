@@ -268,3 +268,19 @@ Each model was trained only on games before the video's date.
 - The 13 calls are identical to the downloaded-file run (8/11 matched correct, STRONG 3/3).
 - For a call a hitter could actually use, predict from the set alone (drop the 0.33 s lift
   window) at some accuracy cost. That is the next thing to evaluate.
+
+### Calling before the leg lift (set-only standing calls)
+`pitchtip live <url> "<pitcher season>" --set-only` keeps a standing call while the pitcher
+is set and reports the last one made before the lift. The model is retrained with no
+early-lift features.
+
+| | correct | base | called before lift | when |
+|---|---|---|---|---|
+| after-lift calls (set + first 0.33 s of lift) | 29/39 = 74% | 69% | 0 | median 0.98 s after lift onset |
+| **pre-lift standing calls** | **28/38 = 74%** | 68% | 28/38 | median **0.17 s before** lift onset (≈1.2–1.6 s before release) |
+
+On the rolling eval, set-only costs ~6 points for the five most readable pitchers (Miller 78→70%,
+Glasnow 88→79%, Helsley 2024 75→73%, Fried 73→67%, Peralta 70→67%) but stays 13–19 points
+over base. Fixes made along the way: standing calls older than 2 s are discarded (they
+leaked across pitches when the tracker missed a lift), and `--innings` restricts the feed
+to the innings shown in the video.

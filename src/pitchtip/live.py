@@ -46,7 +46,8 @@ def run(src: str, predictor, target_fps: float = 15.0, log: Path | None = None):
         flag = "STRONG" if c["strong"] else "      "
         print(f"[{c['t']:7.1f}s] leg lift -> {c['call']:>4} {flag} trust {c['trust']:.0%}  " +
               "  ".join(f"{k}:{v:.0%}" for k, v in sorted(probs.items(), key=lambda kv: -kv[1])) +
-              f"   ready {c['after_onset_s']:.2f}s after lift onset", flush=True)
+              (f"   called {c['called_before_lift_s']:.1f}s BEFORE the leg lift" if c.get("called_before_lift_s") is not None
+               else f"   ready {c['after_onset_s']:.2f}s after lift onset"), flush=True)
         if log_f:
             log_f.write(json.dumps({**c, "lag_s": lag}, default=float) + "\n"); log_f.flush()
 

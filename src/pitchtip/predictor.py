@@ -68,12 +68,16 @@ class Predictor:
     use_jev: bool = True
     variant: str = "probs+knn"
     hand: str | None = None
+    set_only: bool = False   # call at leg-lift onset from the set position alone
     # running per-game baselines
     _sum: dict = field(default_factory=dict)
     _n: int = 0
 
     def fit(self, games: set | None = None):
         df, hands, emb, y = raw_training(self.key, self.mode, games)
+        if self.set_only:
+            from pitchtip.experiment import set_only
+            df, emb = set_only(df, emb)
         self.hand = df.pitcher_hand.iloc[0]
         self.cols = dataset.feature_columns(df)
         df, hands, emb = causal_normalize(df, hands, emb)
@@ -86,17 +90,20 @@ class Predictor:
     def reset_game(self):
         self._sum, self._n, self._first = {}, 0, []
 
-    def _normalize(self, f: dict, hands: np.ndarray, e: np.ndarray, warmup: int = 5):
+    def _normalize(self, f: dict, hands: np.ndarray, e: np.ndarray, warmup: int = 5, update: bool = True):
         x = np.array([f.get(c, np.nan) for c in self.cols], np.float64)
         cur = {"f": x, "h": hands.astype(np.float64), "e": e.astype(np.float64)}
         if self._n < warmup:
-            self._first.append(cur)
-            base = {k: np.nanmean([d[k] for d in self._first], axis=0) for k in cur}
+            pool = self._first + [cur]
+            base = {k: np.nanmean([d[k] for d in pool], axis=0) for k in cur}
+            if update:
+                self._first.append(cur)
         else:
             base = {k: self._sum[k] / self._n for k in cur}
-        for k, v in cur.items():
-            self._sum[k] = self._sum.get(k, 0) + np.nan_to_num(v)
-        self._n += 1
+        if update:
+            for k, v in cur.items():
+                self._sum[k] = self._sum.get(k, 0) + np.nan_to_num(v)
+            self._n += 1
         row = pd.DataFrame([dict(zip(self.cols, x - base["f"]))])
         return row, np.nan_to_num(cur["h"] - base["h"])[None], np.nan_to_num(cur["e"] - base["e"])[None]
 
@@ -107,10 +114,21 @@ class Predictor:
         f, patch = features.clip_features(cp, ph, self.hand)
         e = embed.clip_embedding(cp, ph)
         e = np.where(np.isfinite(e), e, 0)
+        if self.set_only:
+            e = np.concatenate([e[:768], e[-1:]])
         return f, patch.ravel(), e
 
-    def predict_features(self, f, patch, e) -> dict:
-        row, h, em = self._normalize(f, patch, e)
+    def features_at(self, cp: pose.ClipPose, ph: phases.Phases):
+        """Features for an explicitly given phase window (used for standing calls in the set)."""
+        f, patch = features.clip_features(cp, ph, self.hand)
+        e = embed.clip_embedding(cp, ph)
+        e = np.where(np.isfinite(e), e, 0)
+        if self.set_only:
+            e = np.concatenate([e[:768], e[-1:]])
+        return f, patch.ravel(), e
+
+    def predict_features(self, f, patch, e, update: bool = True) -> dict:
+        row, h, em = self._normalize(f, patch, e, update=update)
         p = self.model.predict_proba(row, h, em)[0]
         out = {"vision": dict(zip(self.model.classes, map(float, p)))}
         if self.use_jev:
