@@ -66,6 +66,15 @@ def clip_features(cp: ClipPose, ph: Phases, hand: str | None) -> tuple[dict[str,
         ea = v[o:e]
         feats[f"early_{name}_delta"] = (float(np.nanmean(ea) - feats[f"set_{name}_mean"])
                                          if np.isfinite(ea).any() else np.nan)
+    # "Coming set": the ~1.3 s before the set window, when the hands come together and the
+    # pitcher reaches into the glove to grip (Strasburg 2019 WS G6).
+    pre_s = max(0, s - int(round(1.3 * cp.fps)))
+    for name in ("hands_x", "hands_y", "glove_wrist_y", "throw_wrist_y", "wrist_gap",
+                 "elbow_spread", "throw_elbow_ang", "head_y"):
+        v = pf[name][pre_s:s]
+        ok = np.isfinite(v)
+        feats[f"set_pre_{name}_mean"] = float(np.nanmean(v) - feats[f"set_{name}_mean"]) if ok.sum() >= 2 else np.nan
+        feats[f"set_pre_{name}_std"] = float(np.nanstd(v)) if ok.sum() >= 2 else np.nan
     # Trajectory: where key body parts are at fixed offsets around the leg-lift onset,
     # relative to the set average (captures re-grip paths, glove drops, early hand break).
     for name in ("hands_x", "hands_y", "glove_wrist_y", "throw_wrist_y", "wrist_gap",

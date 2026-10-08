@@ -209,3 +209,21 @@ when the signal is weak, plus track record or similar deliveries when it is stro
 
 Jev's own confidence is polarized: almost every call is ≥75%. When you need to decide which
 calls to act on, gate on the local model's confidence, whose top-quarter calls run 85–96% correct.
+
+### Strasburg, 2019 WS G6: a documented tip the detector missed
+`demo` on WS G6 (Oct 29, 2019), trained on earlier 2019 games: **68%** overall against a 57%
+base rate, and STRONG calls 14/16 (88%). But the **1st inning**, when his pitching coach
+confirmed he was tipping, was only **6/12 (50%)**. Innings 2+ were 71%.
+
+His tell was reaching into the glove at the waist *before* lifting into the set. The default
+feature window (1.2 s before the leg lift) starts after that. Fixes tested (rolling, local model):
+
+| window | Strasburg 2019 acc / AUC | Glasnow 2019 acc / AUC |
+|---|---|---|
+| set = 1.2 s (default) | 70.1% / 0.766 | 88.6% / 0.927 |
+| set = 2.5 s | 69.5% / 0.784 | 86.2% / 0.925 |
+| 1.2 s + separate "coming set" features (the 1.3 s before) | **71.5% / 0.777** | 86.7% / 0.919 |
+
+The "coming set" features are kept. They cover the gripping-while-coming-set tell class, and
+the stacked experts can down-weight them for pitchers who don't tip there. Strasburg
+across the season (rolling, local model): **70.1% vs a 54.1% base rate.**
