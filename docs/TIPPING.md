@@ -65,24 +65,36 @@ region. Model: stacked experts (body trees / glove-appearance / linear posture).
 Decision: Jev (`jev-preview` / `jev-latest`) given the expert probabilities, the most
 visually similar past deliveries, the tells, and the vision model's track record.
 
-### Leaderboard, fastball vs offspeed (game-grouped CV)
+### Leaderboard, fastball vs offspeed (game-grouped CV, 16 pitcher-seasons, ~24k pitches scanned)
 | pitcher-season | n | AUC | acc | base | acc on 25% most confident |
 |---|---|---|---|---|---|
-| Tyler Glasnow 2019 (documented tip) | 612 | **0.81** | 75.5% | 68.1% | 89.5% |
+| Tyler Glasnow 2019 (documented tip) | 614 | **0.82** | 77.7% | 68.2% | 92.2% |
 | Ryan Helsley 2025 (documented tip) | 923 | **0.79** | 71.2% | 53.7% | 87.8% |
+| Freddy Peralta 2025 | 1088 | **0.77** | 70.4% | 51.3% | 83.1% |
+| Max Fried 2025 | 1358 | 0.74 | 69.0% | 56.5% | 81.1% |
+| Zac Gallen 2025 | 1068 | 0.68 | 66.0% | 53.7% | 73.0% |
+| Jesús Luzardo 2025 | 2385 | 0.68 | 63.6% | 56.7% | 77.0% |
 | Carlos Rodón 2025 | 1333 | 0.68 | 63.9% | 53.8% | 72.4% |
+| Garrett Crochet 2025 | 1221 | 0.67 | 74.7% | 74.5% | 87.5% |
 | Tyler Glasnow 2020 (after his fix) | 767 | 0.66 | 66.2% | 63.1% | 78.5% |
+| Max Scherzer 2025 | 1283 | 0.66 | 62.7% | 50.2% | 70.9% |
 | Clarke Schmidt 2024 | 1170 | 0.64 | 61.8% | 56.8% | 71.2% |
-| Jesús Luzardo 2025 | 1511 | 0.63 | 60.5% | 58.2% | 72.1% |
+| Luis Severino 2018 | 1051 | 0.64 | 60.0% | 52.7% | 71.0% |
+| Yoshinobu Yamamoto 2024 | 651 | 0.63 | 61.1% | 54.1% | 67.3% |
 | Yu Darvish 2017 | 1250 | 0.62 | 67.9% | 67.4% | 77.6% |
+| Yusei Kikuchi 2025 | 1264 | 0.61 | 62.9% | 63.9% | 78.2% |
 | Logan Webb 2025 | 931 | 0.58 | 56.1% | 53.9% | 62.5% |
 
 The two pitchers with confirmed, CF-visible tips rank 1 and 2. For Glasnow, the glove-appearance
 expert alone reaches AUC 0.86, which fits a glove-position tell.
 
 ### Rolling deployment eval (each later block predicted from all earlier games)
+Fastball vs offspeed:
+
 | pitcher | n | base | local | **Jev** |
 |---|---|---|---|---|
+| Peralta 2025 | 430 | 53.9% | 69.5% | **70.0%** |
+| Fried 2025 | 557 | 54.6% | 66.2% | **67.5%** |
 | Glasnow 2019 | 212 | 71.7% | 74.5% | **77.4%** |
 | Rodón 2025 | 526 | 52.8% | 64.8% | **66.3%** |
 | Helsley 2025 | 372 | 54.8% | 64.8% | **65.3%** |
@@ -102,3 +114,31 @@ Jev decision cost is about $0.003 per 1,000 pitches, with ~120–220 ms latency.
 ### Luzardo 2025 before/after his reported fix (6/11)
 AUC 0.695 before vs 0.668 after; with runners on, 0.692 vs 0.658. Same direction as the
 report, but the gap is small.
+
+### Exact pitch type (full arsenal), rolling, behavior only
+| pitcher | arsenal | base | local | **Jev** |
+|---|---|---|---|---|
+| Glasnow 2019 | FF/CU | 71.7% | 77.4% | 75.9% |
+| Helsley 2025 | FF/SL/CU | 48.1% | 62.6% | **61.8%** |
+| Peralta 2025 | FF/SL/CU/CH/CS | 48.2% | 54.3% | **55.2%** |
+| Fried 2025 | FF/SI/FC/CU/ST/CH | 21.4% | 33.0% | **31.1%** |
+
+## League-wide patterns (`pitchtip patterns`, 15 pitcher-seasons, FDR q<0.01)
+- Every scanned pitcher-season has at least one significant behavioral tell.
+- **Arm angles are the most common family**: glove-arm elbow bend (10 pitchers) and
+  throwing-arm elbow bend (9). Next come throwing-hand height (8), hands height (8),
+  glove-hand height (7) and hands-to-chin (7).
+- Tells are spread across the set (11 pitchers), the hand path in the last frames before
+  the lift (12), and the first instant of the leg lift (13). Watching only the static set
+  position misses most of them.
+- The two documented tips were rediscovered in the right body region. Helsley's "arm tick
+  coming set" appears as glove-elbow flare in the set (q=2e-8). Glasnow's glove height
+  appears as glove-hand height in the set: FF 79% when high vs 68% (q=1e-7).
+
+## What did not help
+- Jev with raw features and no vision probabilities (AUC 0.58).
+- A larger glove encoder: DINOv2-base was worse than small on both pitchers tested,
+  because the crops are only ~30 source pixels.
+- A Jev multi-question ensemble: probabilities stayed polarized, with no accuracy gain.
+- `onset_time` was removed as a leak. Savant cuts clips relative to release, so it encodes
+  delivery length.
