@@ -104,6 +104,16 @@ Fastball vs offspeed:
 
 Jev decision cost is about $0.003 per 1,000 pitches, with ~120–220 ms latency.
 
+### Pose-model upgrade: YOLO11s → YOLO11m
+The pitcher is only ~250 px tall on broadcast, so keypoint quality matters. On Glasnow 2019
+(rolling eval, FB vs offspeed), switching to YOLO11m moved the local model from
+AUC 0.78 / 70.8% to **AUC 0.86 / 81.0%**. Jev with the vision model's track record reached
+**82.0%** (base rate 70.7%). The pipeline now defaults to YOLO11m, and all pitchers are
+being re-scanned with it. The YOLO11s tables in this document are kept for reference.
+
+**Live replay of ALDS G5 with YOLO11m and Jev (trust variant): 33 of 35 called pitches
+correct (94%), against a 68% base rate. All 7 offspeed calls were correct.**
+
 ### Live replay: Glasnow, 2019 ALDS Game 5 (the famous tipping game)
 `pitchtip reel` stitched the game into one continuous video. `pitchtip live --train-before
 2019-10-10` had to find the pitcher, detect the set and leg lift, and call each pitch.

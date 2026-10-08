@@ -294,7 +294,8 @@ def train(pitcher: str, mode: str = "type", per_game: bool = True):
 @app.command()
 def live(source: str, key: str = typer.Argument(..., help='dataset to learn the pitcher from, e.g. "Tyler Glasnow 2019"'),
          mode: str = "type", jev: bool = True, log: Optional[str] = None,
-         train_before: Optional[str] = typer.Option(None, help="only learn from games before this date (YYYY-MM-DD)")):
+         train_before: Optional[str] = typer.Option(None, help="only learn from games before this date (YYYY-MM-DD)"),
+         variant: str = typer.Option("trust", help="Jev evidence variant")):
     """Call pitches from behavior on a stream URL (yt-dlp) or a recorded video file."""
     from pathlib import Path
     from pitchtip import config, live as live_mod
@@ -304,7 +305,7 @@ def live(source: str, key: str = typer.Argument(..., help='dataset to learn the 
     if train_before:
         pf = pd.read_parquet(config.FEATURES_DIR / f"{slug(key)}.parquet")
         games = set(pf[pf.date < train_before].game_pk)
-    pr = Predictor(key, mode, use_jev=jev).fit(games)
+    pr = Predictor(key, mode, use_jev=jev, variant=variant).fit(games)
     typer.echo(f"model ready for {key}: classes {pr.model.classes}")
     live_mod.run(source, pr, log=Path(log) if log else None)
 
