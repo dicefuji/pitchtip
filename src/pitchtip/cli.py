@@ -229,7 +229,7 @@ def leaderboard(mode: str = "fb", out: str = "data/leaderboard.csv"):
 
 
 @app.command()
-def rolling(keys: list[str], mode: str = "fb", variant: str = "probs+knn",
+def rolling(keys: list[str], mode: str = "fb", variant: str = "auto",
             jev_model: str = "jev-preview", no_jev: bool = False, out: str = "data/rolling_results.jsonl"):
     """Deployment-style eval: predict each later block of games from all earlier games."""
     from pitchtip import experiment
