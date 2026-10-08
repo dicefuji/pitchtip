@@ -32,11 +32,14 @@ def scan(pitchers: list[str] = typer.Argument(..., help='"Name:season[:max_games
     from pitchtip.vision import embed as emb
     for spec in pitchers:
         name, season, *mg = spec.split(":")
-        df = dataset.scan(name, [int(season)], int(mg[0]) if mg else None, game_type, workers)
-        key = dataset.dataset_key(df.pitcher_name.iloc[0], [int(season)])
-        typer.echo(f"{key}: features for {len(df)} pitches", nl=True)
-        if embed:
-            emb.build(key)
+        try:
+            df = dataset.scan(name, [int(season)], int(mg[0]) if mg else None, game_type, workers)
+            key = dataset.dataset_key(df.pitcher_name.iloc[0], [int(season)])
+            typer.echo(f"{key}: features for {len(df)} pitches", nl=True)
+            if embed:
+                emb.build(key)
+        except Exception as e:  # keep the batch going
+            typer.echo(f"{spec}: FAILED {type(e).__name__}: {e}")
 
 
 @app.command()
@@ -125,7 +128,7 @@ def eval(pitcher: str, mode: str = typer.Option("type", help="type | fb (fastbal
 
 @app.command()
 def tune(keys: list[str], mode: str = "type", no_jev: bool = False, no_emb: bool = False,
-         variants: str = "probs,knn,probs+knn,full", out: Optional[str] = None):
+         variants: str = "probs,experts,probs+knn,full", out: Optional[str] = None):
     """Behavior-only: local model vs Jev variants (chosen on val games, scored on test games)."""
     from pitchtip import experiment
     allres = []
@@ -207,12 +210,14 @@ def leaderboard(mode: str = "fb", out: str = "data/leaderboard.csv"):
             m = BehaviorModel()
             m.cols, m.classes = dataset.feature_columns(df), sorted(y.unique())
             oof = m._oof(df, hands, emb, y)
+            w = BehaviorModel().fit(df, hands, emb, y).expert_weights
             s = local.score(y, oof, m.classes)
             t = find_tells(df, y, top=3)
             auc = float(np.mean(list(s["auc_one_vs_rest"].values())))
             rows.append({"key": key, "n": s["n"], "games": df.game_pk.nunique(), "accuracy": round(s["accuracy"], 3),
                          "base_rate": round(s["base_rate"], 3), "auc": round(auc, 3),
                          "top25_acc": round(s["selective_accuracy"]["top25pct"], 3),
+                         "expert_weights": w,
                          "top_tell": t.tell.iloc[0] if len(t) else ""})
             typer.echo(f"{key:32s} n={s['n']:5d} auc={auc:.3f} acc={s['accuracy']:.3f} base={s['base_rate']:.3f} "
                        f"top25%={s['selective_accuracy']['top25pct']:.3f}")
@@ -221,6 +226,23 @@ def leaderboard(mode: str = "fb", out: str = "data/leaderboard.csv"):
     lb = pd.DataFrame(rows).sort_values("auc", ascending=False)
     lb.to_csv(out, index=False)
     typer.echo(lb.to_string(index=False))
+
+
+@app.command()
+def rolling(keys: list[str], mode: str = "fb", variant: str = "probs+knn",
+            jev_model: str = "jev-preview", no_jev: bool = False, out: str = "data/rolling_results.jsonl"):
+    """Deployment-style eval: predict each later block of games from all earlier games."""
+    from pitchtip import experiment
+    for k in keys:
+        r = experiment.rolling(k, mode, variant=variant, jev_model=jev_model, jev=not no_jev)
+        with open(out, "a") as f:
+            f.write(json.dumps(r, default=float) + "\n")
+        for name in ("local", "jev"):
+            if name in r:
+                s = r[name]
+                typer.echo(f"{k:24s} {name:5s} n={s['n']:4d} acc={s['accuracy']:.3f} base={s['base_rate']:.3f} "
+                           f"auc={np.mean(list(s['auc_one_vs_rest'].values())):.3f} "
+                           f"top25={s['selective_accuracy']['top25pct']:.3f} top50={s['selective_accuracy']['top50pct']:.3f}")
 
 
 @app.command()

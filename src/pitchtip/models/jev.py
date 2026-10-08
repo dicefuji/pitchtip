@@ -129,14 +129,22 @@ class JevBehavior:
 
     def evidence(self, df, hands, emb) -> list[dict]:
         P = self.m.predict_proba(df, hands, emb)
+        EP = self.m.expert_probas(df, hands, emb) if hasattr(self.m, "expert_probas") else {}
         X = (self.m._views(df, hands, emb) - self.mu) / self.sd
         X /= np.linalg.norm(X, axis=1, keepdims=True) + 1e-9
         sims = X @ self.Z.T
         out = []
         for i in range(len(df)):
             st = {"arsenal_base_rates": {c: round(float(p), 3) for c, p in self.base.items()}}
-            if self.variant in ("probs", "probs+knn", "full"):
+            if self.variant in ("probs", "probs+knn", "full", "experts"):
                 st["vision_model_probabilities"] = {c: round(float(p), 3) for c, p in zip(self.m.classes, P[i])}
+            if self.variant in ("experts", "full") and EP:
+                st["expert_opinions"] = {
+                    {"body": "body position & movement model", "glove": "glove/hands appearance model",
+                     "linear": "simple posture model"}[n]: {c: round(float(p), 3) for c, p in zip(self.m.classes, EP[n][i])}
+                    for n in EP}
+                if getattr(self.m, "expert_weights", None):
+                    st["expert_reliability_for_this_pitcher"] = {n: float(w) for n, w in self.m.expert_weights.items()}
             if self.variant in ("knn", "probs+knn", "full"):
                 nn = np.argsort(-sims[i])[: self.k]
                 votes = pd.Series(self.y[nn]).value_counts()

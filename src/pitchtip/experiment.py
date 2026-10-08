@@ -40,14 +40,14 @@ def summarize(y: pd.Series, proba: np.ndarray, classes: list[str]) -> dict:
             for k, v in s.items()}
 
 
-def run(key: str, mode: str = "type", variants=("probs", "knn", "probs+knn", "full"),
+def run(key: str, mode: str = "type", variants=("probs", "experts", "probs+knn", "full"),
         use_emb: bool = True, jev: bool = True, max_n: int = 400,
         jev_models=("jev-latest", "jev-preview")) -> dict:
     df, hands, emb, y = load(key, mode)
     if not use_emb:
         emb = None
     tr, va, te = chrono_split(df)
-    m = BehaviorModel(n_emb=24 if emb is not None else 0).fit(df[tr], hands[tr], _sub(emb, tr), y[tr])
+    m = BehaviorModel(n_emb=32 if emb is not None else 0).fit(df[tr], hands[tr], _sub(emb, tr), y[tr])
     res = {"key": key, "mode": mode, "n_train": int(tr.sum()), "n_val": int(va.sum()), "n_test": int(te.sum()),
            "temperature": round(m.temperature, 3)}
     for name, mask in [("val", va), ("test", te)]:
@@ -86,4 +86,34 @@ def run(key: str, mode: str = "type", variants=("probs", "knn", "probs+knn", "fu
     s |= {"variant": best[1], "jev_model": best[0], "latency_p50_s": round(float(np.median([o["latency_s"] for o in out])), 3),
           "usd_per_1k_pitches": round(toks / len(out) * 1000 * 0.042 / 1e6, 4)}
     res["jev_test"] = s
+    return res
+
+
+def rolling(key: str, mode: str = "fb", test_frac: float = 0.4, blocks: int = 5,
+            variant: str = "probs+knn", jev_model: str = "jev-preview", jev: bool = True) -> dict:
+    """Deployment-style evaluation: the last `test_frac` of games are split into `blocks`
+    chronological blocks; each block is predicted by a model trained on all earlier games."""
+    from pitchtip.models.behavior import _temp
+    df, hands, emb, y = load(key, mode)
+    games = df.drop_duplicates("game_pk").sort_values(["date", "game_pk"]).game_pk.tolist()
+    test_games = games[int(len(games) * (1 - test_frac)):]
+    P_loc, P_jev, Y = [], [], []
+    for blk in np.array_split(np.array(test_games), min(blocks, len(test_games))):
+        tr = df.game_pk.isin(games[: games.index(blk[0])]).to_numpy()
+        te = df.game_pk.isin(blk).to_numpy()
+        m = BehaviorModel(n_emb=32 if emb is not None else 0).fit(df[tr], hands[tr], _sub(emb, tr), y[tr])
+        pl = m.predict_proba(df[te], hands[te], _sub(emb, te))
+        P_loc.append(pl); Y.append(y[te])
+        if jev:
+            tells = find_tells(df[tr], y[tr], top=6)
+            jb = JevBehavior(m, df[tr], hands[tr], _sub(emb, tr), y[tr], tells, variant=variant, jev_model=jev_model)
+            idx = np.flatnonzero(te)
+            out = asyncio.run(jb.predict(jb.evidence(df.iloc[idx], hands[idx], _sub(emb, idx))))
+            P_jev.append(np.array([[o["probabilities"].get(c, 0) for c in m.classes] for o in out]))
+    yy = pd.concat(Y).reset_index(drop=True)
+    classes = sorted(y.unique())
+    res = {"key": key, "mode": mode, "n_test": len(yy), "test_games": len(test_games),
+           "local": summarize(yy, np.vstack(P_loc), classes)}
+    if jev:
+        res["jev"] = summarize(yy, np.vstack(P_jev), classes) | {"variant": variant, "jev_model": jev_model}
     return res

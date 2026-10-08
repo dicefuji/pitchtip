@@ -24,7 +24,7 @@ from pitchtip.vision import embed, phases, pose
 def raw_training(key: str, mode: str, games: set | None = None):
     """Raw (un-normalized) features/hands/embeddings, optionally restricted to games."""
     df, hands = dataset.load_features(key, per_game=False)
-    emb = embed.load(key, per_game=False)
+    emb = embed.load(key, per_game=False, df=df)
     y = make_labels(df.pitch_type, mode)
     keep = (y != "OTHER").to_numpy().copy()
     if games is not None:

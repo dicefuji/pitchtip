@@ -66,6 +66,17 @@ def clip_features(cp: ClipPose, ph: Phases, hand: str | None) -> tuple[dict[str,
         ea = v[o:e]
         feats[f"early_{name}_delta"] = (float(np.nanmean(ea) - feats[f"set_{name}_mean"])
                                          if np.isfinite(ea).any() else np.nan)
+    # Trajectory: where key body parts are at fixed offsets around the leg-lift onset,
+    # relative to the set average (captures re-grip paths, glove drops, early hand break).
+    for name in ("hands_x", "hands_y", "glove_wrist_y", "throw_wrist_y", "wrist_gap",
+                 "head_y", "elbow_spread", "glove_elbow_ang", "throw_elbow_ang"):
+        v, m0 = pf[name], feats[f"set_{name}_mean"]
+        for off in (-9, -6, -3, -1, 2, 4):
+            i = o + off
+            ok = s <= i < e if off < 0 else o <= i < e
+            if off < 0 and i < s:
+                ok = 0 <= i  # set window may be short; fall back to any earlier frame
+            feats[f"set_traj_{name}_{off:+d}"] = float(v[i] - m0) if ok and 0 <= i < len(v) and np.isfinite(v[i]) else np.nan
     # Set duration: how long the hands have held their final set height before the lift.
     hy = pf["hands_y"]
     ref = np.nanmedian(hy[max(o - 3, 0):o])

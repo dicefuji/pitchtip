@@ -1,8 +1,11 @@
 """Behavior-only pitch model: pose features + glove embeddings, nothing about the count.
 
-Ensemble of gradient-boosted trees (pose features) and a ridge-logistic model (glove
-embedding PCA + pose), temperature-calibrated on game-grouped out-of-fold predictions so
-its probabilities are honest inputs for Jev.
+Stacked per-view experts, because pitchers tip in different ways:
+  * body   - gradient-boosted trees on pose / trajectory features
+  * glove  - ridge-logistic on the glove-region DINOv2 embedding (PCA) + hand patch PCA
+  * linear - ridge-logistic on pose features
+A meta logistic regression learns, per pitcher, how much to trust each expert from
+game-grouped out-of-fold predictions. Output is temperature-calibrated.
 """
 from __future__ import annotations
 
@@ -20,67 +23,122 @@ from sklearn.preprocessing import StandardScaler
 
 from pitchtip.dataset import feature_columns
 
+EXPERTS = ("body", "glove", "linear")
+
 
 def _hgb():
     return HistGradientBoostingClassifier(max_iter=250, learning_rate=0.04, max_leaf_nodes=15,
                                           min_samples_leaf=12, l2_regularization=1.0, random_state=0)
 
 
+def _lr(C=0.05):
+    return make_pipeline(StandardScaler(), LogisticRegression(C=C, max_iter=3000))
+
+
 @dataclass
 class BehaviorModel:
-    n_emb: int = 24
+    n_emb: int = 32
     n_hands: int = 8
-    w_tree: float = 0.5
     cols: list[str] = field(default_factory=list)
     classes: list[str] = field(default_factory=list)
     temperature: float = 1.0
 
-    def _views(self, df, hands, emb, fit=False):
+    # ---- views -------------------------------------------------------------
+    def _pose(self, df):
         P = df[self.cols].to_numpy(np.float32)
-        P = np.where(np.isfinite(P), P, 0)
-        parts = [P]
+        return np.where(np.isfinite(P), P, 0)
+
+    def _glove(self, hands, emb, fit=False):
+        parts = []
+        if emb is not None and self.n_emb:
+            if fit:
+                self.pca_e = PCA(min(self.n_emb, len(emb) - 1), random_state=0).fit(emb)
+            parts.append(self.pca_e.transform(emb))
         if hands is not None and self.n_hands:
             if fit:
                 self.pca_h = PCA(self.n_hands, random_state=0).fit(hands)
             parts.append(self.pca_h.transform(hands))
-        if emb is not None and self.n_emb:
-            if fit:
-                self.pca_e = PCA(self.n_emb, random_state=0).fit(emb)
-            parts.append(self.pca_e.transform(emb))
-        return np.hstack(parts)
+        return np.hstack(parts) if parts else None
 
-    def _raw(self, X):
-        pt = self.tree.predict_proba(X)
-        pl = self.lin.predict_proba(X)
-        return self.w_tree * pt + (1 - self.w_tree) * pl
+    def _views(self, df, hands, emb, fit=False):
+        """Concatenated feature space (used for nearest-neighbour evidence)."""
+        g = self._glove(hands, emb, fit)
+        return self._pose(df) if g is None else np.hstack([self._pose(df), g])
 
-    def fit(self, df, hands, emb, y, calibrate: bool = True):
+    # ---- experts -----------------------------------------------------------
+    def _fit_experts(self, df, hands, emb, y):
+        P, G = self._pose(df), self._glove(hands, emb, fit=True)
+        self.experts = {"body": _hgb().fit(P, y), "linear": _lr().fit(P, y)}
+        if G is not None:
+            self.experts["glove"] = _lr(0.02).fit(G, y)
+
+    def expert_probas(self, df, hands, emb) -> dict[str, np.ndarray]:
+        P, G = self._pose(df), self._glove(hands, emb)
+        out = {}
+        for name, m in self.experts.items():
+            X = G if name == "glove" else P
+            p = m.predict_proba(X)
+            full = np.zeros((len(df), len(self.classes)))
+            for j, c in enumerate(m.classes_):
+                full[:, self.classes.index(c)] = p[:, j]
+            out[name] = full
+        return out
+
+    def _stack_X(self, ep: dict[str, np.ndarray]) -> np.ndarray:
+        return np.hstack([np.log(np.clip(ep[n], 1e-4, 1)) for n in EXPERTS if n in ep])
+
+    # ---- fit / predict -----------------------------------------------------
+    def fit(self, df, hands, emb, y, stack: bool = True):
         self.cols = feature_columns(df)
         self.classes = sorted(y.unique())
-        if calibrate and df.game_pk.nunique() >= 3:
-            oof = self._oof(df, hands, emb, y)
+        self.meta = None
+        if stack and df.game_pk.nunique() >= 3:
+            oof = self._oof_experts(df, hands, emb, y)
+            Xs = self._stack_X(oof)
+            self.meta = LogisticRegression(C=1.0, max_iter=2000).fit(Xs, y)
+            pm = self._meta_proba(Xs)
             yi = np.array([self.classes.index(c) for c in y])
-            nll = lambda T: -np.log(np.clip(_temp(oof, T)[np.arange(len(yi)), yi], 1e-9, 1)).mean()
+            nll = lambda T: -np.log(np.clip(_temp(pm, T)[np.arange(len(yi)), yi], 1e-9, 1)).mean()
             self.temperature = float(minimize_scalar(nll, bounds=(0.3, 5), method="bounded").x)
-        X = self._views(df, hands, emb, fit=True)
-        self.tree = _hgb().fit(X, y)
-        self.lin = make_pipeline(StandardScaler(), LogisticRegression(C=0.05, max_iter=2000)).fit(X, y)
+            self.expert_weights = dict(zip([n for n in EXPERTS if n in oof],
+                                           np.abs(self.meta.coef_).reshape(len(self.meta.coef_), -1, len(self.classes)).mean((0, 2)).round(3)))
+        self._fit_experts(df, hands, emb, y)
         return self
 
+    def _oof_experts(self, df, hands, emb, y):
+        g = df.game_pk.to_numpy()
+        oof = {}
+        for tr, te in GroupKFold(min(5, len(np.unique(g)))).split(df, y, g):
+            m = BehaviorModel(self.n_emb, self.n_hands)
+            m.cols, m.classes = self.cols, self.classes
+            m._fit_experts(df.iloc[tr], _take(hands, tr), _take(emb, tr), y.iloc[tr])
+            for name, p in m.expert_probas(df.iloc[te], _take(hands, te), _take(emb, te)).items():
+                oof.setdefault(name, np.zeros((len(df), len(self.classes))))[te] = p
+        return oof
+
+    def _meta_proba(self, Xs):
+        p = self.meta.predict_proba(Xs)
+        full = np.zeros((len(Xs), len(self.classes)))
+        for j, c in enumerate(self.meta.classes_):
+            full[:, self.classes.index(c)] = p[:, j]
+        return full
+
+    def predict_proba(self, df, hands, emb):
+        ep = self.expert_probas(df, hands, emb)
+        if self.meta is None:
+            return np.mean(list(ep.values()), axis=0)
+        return _temp(self._meta_proba(self._stack_X(ep)), self.temperature)
+
     def _oof(self, df, hands, emb, y):
+        """Game-grouped out-of-fold probabilities of the full stacked model."""
         oof = np.zeros((len(df), len(self.classes)))
         g = df.game_pk.to_numpy()
         for tr, te in GroupKFold(min(5, len(np.unique(g)))).split(df, y, g):
-            m = BehaviorModel(self.n_emb, self.n_hands, self.w_tree).fit(
-                df.iloc[tr], _take(hands, tr), _take(emb, tr), y.iloc[tr], calibrate=False)
+            m = BehaviorModel(self.n_emb, self.n_hands).fit(df.iloc[tr], _take(hands, tr), _take(emb, tr), y.iloc[tr])
             p = m.predict_proba(df.iloc[te], _take(hands, te), _take(emb, te))
             for j, c in enumerate(m.classes):
                 oof[te, self.classes.index(c)] = p[:, j]
         return oof
-
-    def predict_proba(self, df, hands, emb):
-        p = self._raw(self._views(df, hands, emb))
-        return _temp(p, self.temperature)
 
 
 def _take(a, idx):

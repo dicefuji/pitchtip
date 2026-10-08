@@ -79,11 +79,23 @@ def build(key: str) -> np.ndarray:
         out.append(clip_embedding(cp, ph) if ph is not None else np.full(1537, np.nan, np.float32))
     arr = np.stack(out).astype(np.float32)
     np.save(config.FEATURES_DIR / f"{s}_emb.npy", arr)
+    np.save(config.FEATURES_DIR / f"{s}_emb_ids.npy", df.play_id.to_numpy().astype(str))
     return arr
 
 
 def load(key: str, per_game: bool = True, df: pd.DataFrame | None = None) -> np.ndarray:
-    arr = np.load(config.FEATURES_DIR / f"{slug(key)}_emb.npy")
+    """Embeddings aligned to the current features parquet (by play_id)."""
+    s = slug(key)
+    arr = np.load(config.FEATURES_DIR / f"{s}_emb.npy")
+    ids_path = config.FEATURES_DIR / f"{s}_emb_ids.npy"
+    if df is None:
+        df = pd.read_parquet(config.FEATURES_DIR / f"{s}.parquet")
+    if ids_path.exists():
+        pos = {pid: i for i, pid in enumerate(np.load(ids_path))}
+        idx = np.array([pos.get(pid, -1) for pid in df.play_id])
+        arr = np.where((idx >= 0)[:, None], arr[np.maximum(idx, 0)], np.nan)
+    elif len(arr) != len(df):
+        raise ValueError(f"{key}: embeddings out of date (rebuild with `pitchtip embed`)")
     arr = np.where(np.isfinite(arr), arr, np.nanmean(arr, 0))
     if per_game and df is not None:
         for _, idx in df.groupby("game_pk").indices.items():
