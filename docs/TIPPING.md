@@ -254,3 +254,17 @@ Each model was trained only on games before the video's date.
 
 ![rolling accuracy](img/rolling_accuracy.png)
 ![lift](img/jev_lift.png)
+
+## Live stream test (YouTube URL, streamed, not downloaded)
+`pitchtip live "https://www.youtube.com/watch?v=PAlZF-EHUAU" "Mason Miller 2026" --train-before 2026-09-06`
+
+- The stream URL is resolved with `yt-dlp` and decoded frame by frame. An 11-minute stream
+  took 353 s, about 1.9x faster than real time, on an Apple-silicon laptop.
+- Cascade: YOLO11n tracks every frame (~6 ms). YOLO11x works through the buffered set in
+  6-frame batches as frames arrive, so at the leg lift only the newest frames are left.
+- **Call ready a median 0.98 s after leg-lift onset** (8 of 13 calls under
+  1.1 s). Release from the stretch typically comes 1.0–1.4 s after onset, so most calls land
+  before release. The late ones (2–4 s) are lifts the tiny tracker noticed late.
+- The 13 calls are identical to the downloaded-file run (8/11 matched correct, STRONG 3/3).
+- For a call a hitter could actually use, predict from the set alone (drop the 0.33 s lift
+  window) at some accuracy cost. That is the next thing to evaluate.

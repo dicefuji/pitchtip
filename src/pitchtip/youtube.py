@@ -145,9 +145,42 @@ def render(frame, cp, ph, out: dict, truth: str | None, path: Path, label: str):
     cv2.imwrite(str(path), np.hstack([f, panel]))
 
 
-def cascade_call(predictor, ts, frs, target_fps: float):
-    """Re-run the accurate pose model on the buffered frames, segment, featurize."""
-    kps, bxs = pose.pose_frames(list(frs))
+class AccuratePose:
+    """Runs the accurate pose model incrementally (small batches) as frames arrive, so
+    when the leg lift is detected only the last few frames still need the big model."""
+
+    def __init__(self, batch: int = 6):
+        self.batch, self.prev_box = batch, None
+        self.res: dict[int, tuple] = {}
+
+    def reset(self):
+        self.prev_box, self.res = None, {}
+
+    def update(self, entries, force: bool = False):
+        todo = [e for e in entries if e[0] not in self.res]
+        while todo and (force or len(todo) >= self.batch):
+            chunk, todo = todo[: self.batch], todo[self.batch:]
+            out = pose.get_model()([e[1] for e in chunk], verbose=False, conf=0.3, device=pose._device)
+            for (fid, f), r in zip(chunk, out):
+                kp, box = pose._select(r, f.shape[0], self.prev_box)
+                if kp is not None:
+                    self.prev_box = box
+                    kp = kp.copy(); kp[kp[:, 2] < 0.3, :2] = np.nan
+                self.res[fid] = (kp, box)
+
+    def get(self, fid):
+        kp, box = self.res.get(fid, (None, None))
+        return (np.full((17, 3), np.nan), np.full(4, np.nan)) if kp is None else (kp, box)
+
+
+def cascade_call(predictor, ts, frs, target_fps: float, acc: "AccuratePose | None" = None, fids=None):
+    """Accurate pose for the buffered frames (reusing incremental results), segment, featurize."""
+    if acc is None:
+        kps, bxs = pose.pose_frames(list(frs))
+    else:
+        acc.update(list(zip(fids, frs)), force=True)
+        kb = [acc.get(f) for f in fids]
+        kps, bxs = np.array([k for k, _ in kb]), np.array([b for _, b in kb])
     gray = [cv2.cvtColor(f, cv2.COLOR_BGR2GRAY) for f in frs]
     hs = np.array([pose._hands_patch(g, k, b) if np.isfinite(b).all() else
                    np.zeros((pose.HAND_PATCH, pose.HAND_PATCH), np.uint8) for g, k, b in zip(gray, kps, bxs)])
@@ -161,17 +194,21 @@ def cascade_call(predictor, ts, frs, target_fps: float):
     return None if feats is None else (cp, ph, feats)
 
 
-def run(video: str, predictor, out_dir: Path, target_fps: float = 15.0, buffer_seconds: float = 4.0):
+def run(video: str, predictor, out_dir: Path, target_fps: float = 15.0, buffer_seconds: float = 4.0,
+        on_call=None):
     """Detect every leg lift in the video and call it; returns list of (call, ClipPose, Phases).
 
-    Cascade: a tiny pose model tracks the pitcher on every frame and spots the leg lift;
-    only then is the accurate model run (batched) over the buffered seconds."""
+    Cascade: a tiny pose model tracks the pitcher on every frame and spots the leg lift,
+    while the accurate model works through the buffered frames in small batches; at the
+    lift only the newest few frames are left for it, so the call lands before release."""
+    import time
     out_dir.mkdir(parents=True, exist_ok=True)
     cap = cv2.VideoCapture(video)
     fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
     step = max(int(round(fps / target_fps)), 1)
     n = int(buffer_seconds * target_fps)
     buf = collections.deque(maxlen=n)
+    acc = AccuratePose()
     prev_box, cooldown, i, calls, prev_gray = None, -1.0, 0, [], None
     hand = predictor.hand
     while cap.grab():
@@ -181,38 +218,50 @@ def run(video: str, predictor, out_dir: Path, target_fps: float = 15.0, buffer_s
         ok, frame = cap.retrieve()
         if not ok:
             break
+        t_read = time.perf_counter()
         t = i / fps
         gray = cv2.cvtColor(cv2.resize(frame, (320, 180)), cv2.COLOR_BGR2GRAY)
         if pose.is_hard_cut(prev_gray, gray):
-            buf.clear(); prev_box = None  # camera cut: never let one delivery span two shots
+            buf.clear(); prev_box = None; acc.reset()  # camera cut: never span two shots
         prev_gray = gray
         kp, box = pose.pose_frame(frame, prev_box, weights=pose.FAST_WEIGHTS)
         if kp is None:
-            buf.clear(); prev_box = None
+            buf.clear(); prev_box = None; acc.reset()
             continue
         prev_box = box
         kp = kp.copy(); kp[kp[:, 2] < 0.3, :2] = np.nan
-        buf.append((t, kp, box, frame))
-        if t < cooldown or len(buf) < n // 2:
+        buf.append((i, t, kp, box, frame))
+        if t < cooldown:
             continue
-        ts, kps, bxs, frs = zip(*buf)
+        acc.update([(e[0], e[4]) for e in buf])          # keep the big model nearly caught up
+        if len(buf) < n // 2:
+            continue
+        fids, ts, kps, bxs, frs = zip(*buf)
         cp_fast = pose.ClipPose(target_fps, np.array(ts), np.array(kps), np.array(bxs),
                                 np.zeros((len(ts), pose.HAND_PATCH, pose.HAND_PATCH), np.uint8), frame.shape[1::-1])
         ph_fast = phases.segment(cp_fast, hand)
         if ph_fast is None or ph_fast.early_end + 1 >= len(ts):
             continue
-        res = cascade_call(predictor, ts, frs, target_fps)
+        res = cascade_call(predictor, ts, frs, target_fps, acc, fids)
         cooldown = t + 6.0
-        buf.clear()
+        buf.clear(); acc.reset()
         if res is None:
             continue
         cp, ph, feats = res
         o = predictor.predict_features(*feats)
         c = {"t": float(cp.t[ph.onset]), **{k: o[k] for k in ("call", "confidence", "trust", "strong", "vision")},
-             "jev": o.get("jev"), "idx": len(calls)}
+             "jev": o.get("jev"), "idx": len(calls),
+             # compute time from the last frame needed until the call is ready
+             "decide_s": round(time.perf_counter() - t_read, 3),
+             # video time from the lift onset until the call is ready
+             "after_onset_s": round(float(t - cp.t[ph.onset]) + time.perf_counter() - t_read, 3)}
         np.save(out_dir / f"call_{len(calls):03d}_frame.npy", np.array(frs[ph.onset]))
         cp.save(out_dir / f"call_{len(calls):03d}_pose.npz")  # lets renders be redone without video
         calls.append((c, cp, ph))
-        print(f"[{c['t']:7.1f}s] call {c['call']:>4} trust {c['trust']:.0%}{' STRONG' if c['strong'] else ''}", flush=True)
+        if on_call:
+            on_call(c)
+        else:
+            print(f"[{c['t']:7.1f}s] call {c['call']:>4} trust {c['trust']:.0%}{' STRONG' if c['strong'] else ''}"
+                  f"  ready {c['after_onset_s']:.2f}s after lift onset", flush=True)
     cap.release()
     return calls
