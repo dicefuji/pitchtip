@@ -27,12 +27,16 @@ def fetch(pitcher: str, season: list[int] = typer.Option(..., help="Season(s), r
 
 @app.command()
 def scan(pitchers: list[str] = typer.Argument(..., help='"Name:season[:max_games]" entries'),
-         game_type: list[str] = typer.Option(["R"]), workers: int = 8):
-    """Download + pose-extract many pitcher-seasons concurrently."""
+         game_type: list[str] = typer.Option(["R"]), workers: int = 8, embed: bool = True):
+    """Download + pose-extract (+ glove-embed) many pitcher-seasons."""
+    from pitchtip.vision import embed as emb
     for spec in pitchers:
         name, season, *mg = spec.split(":")
         df = dataset.scan(name, [int(season)], int(mg[0]) if mg else None, game_type, workers)
-        typer.echo(f"{name} {season}: features for {len(df)} pitches")
+        key = dataset.dataset_key(df.pitcher_name.iloc[0], [int(season)])
+        typer.echo(f"{key}: features for {len(df)} pitches", nl=True)
+        if embed:
+            emb.build(key)
 
 
 @app.command()
@@ -184,6 +188,42 @@ def demo(key: str, game: str = typer.Option("last", help="gamePk or 'last'"), n:
 
 
 @app.command()
+def leaderboard(mode: str = "fb", out: str = "data/leaderboard.csv"):
+    """Rank every scanned pitcher-season by how predictable their pitches are from behavior."""
+    from pitchtip import config
+    from pitchtip.experiment import load
+    from pitchtip.models.behavior import BehaviorModel
+    from pitchtip.models import local
+    from pitchtip.tips import find_tells
+    rows = []
+    for f in sorted(config.FEATURES_DIR.glob("*_emb.npy")):
+        key = f.name[: -len("_emb.npy")]
+        pq = pd.read_parquet(config.FEATURES_DIR / f"{key}.parquet")
+        key = dataset.dataset_key(pq.pitcher_name.iloc[0], sorted({int(d[:4]) for d in pq.date}))
+        try:
+            df, hands, emb, y = load(key, mode)
+            if df.game_pk.nunique() < 4 or y.nunique() < 2:
+                continue
+            m = BehaviorModel()
+            m.cols, m.classes = dataset.feature_columns(df), sorted(y.unique())
+            oof = m._oof(df, hands, emb, y)
+            s = local.score(y, oof, m.classes)
+            t = find_tells(df, y, top=3)
+            auc = float(np.mean(list(s["auc_one_vs_rest"].values())))
+            rows.append({"key": key, "n": s["n"], "games": df.game_pk.nunique(), "accuracy": round(s["accuracy"], 3),
+                         "base_rate": round(s["base_rate"], 3), "auc": round(auc, 3),
+                         "top25_acc": round(s["selective_accuracy"]["top25pct"], 3),
+                         "top_tell": t.tell.iloc[0] if len(t) else ""})
+            typer.echo(f"{key:32s} n={s['n']:5d} auc={auc:.3f} acc={s['accuracy']:.3f} base={s['base_rate']:.3f} "
+                       f"top25%={s['selective_accuracy']['top25pct']:.3f}")
+        except Exception as e:
+            typer.echo(f"{key}: {e}")
+    lb = pd.DataFrame(rows).sort_values("auc", ascending=False)
+    lb.to_csv(out, index=False)
+    typer.echo(lb.to_string(index=False))
+
+
+@app.command()
 def train(pitcher: str, mode: str = "type", per_game: bool = True):
     """Fit the local model on all games and save it for live use."""
     from pitchtip.models import local
@@ -194,15 +234,15 @@ def train(pitcher: str, mode: str = "type", per_game: bool = True):
 
 
 @app.command()
-def live(source: str, pitcher: str, mode: str = "type", log: Optional[str] = None):
-    """Predict pitches on a stream URL (yt-dlp) or a recorded video file."""
+def live(source: str, key: str = typer.Argument(..., help='dataset to learn the pitcher from, e.g. "Tyler Glasnow 2019"'),
+         mode: str = "type", jev: bool = True, log: Optional[str] = None):
+    """Call pitches from behavior on a stream URL (yt-dlp) or a recorded video file."""
     from pathlib import Path
-    from pitchtip.data.mlb import find_pitcher
-    from pitchtip.models import local
     from pitchtip import live as live_mod
-    p = find_pitcher(pitcher.rsplit(" ", 1)[0] if pitcher[-4:].isdigit() else pitcher)
-    m = local.load(pitcher, mode)
-    live_mod.run(source, p["hand"], m, p["name"], log=Path(log) if log else None)
+    from pitchtip.predictor import Predictor
+    pr = Predictor(key, mode, use_jev=jev).fit()
+    typer.echo(f"model ready for {key}: classes {pr.model.classes}")
+    live_mod.run(source, pr, log=Path(log) if log else None)
 
 
 @app.command()

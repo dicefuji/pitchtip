@@ -79,6 +79,11 @@ def score(y: pd.Series, proba: np.ndarray, classes: list[str]) -> dict:
         "top10pct_precision": {c: float((y[proba[:, j] >= np.quantile(proba[:, j], 0.9)] == c).mean())
                                for j, c in enumerate(classes)},
         "base_rates": dict(zip(classes, prior.round(3).tolist())),
+        # How a tip is used in practice: only act when the read is clear.
+        "selective_accuracy": {f"top{int(c * 100)}pct": float(
+            (pred[np.argsort(-proba.max(1))[: max(1, int(len(y) * c))]]
+             == np.asarray(y)[np.argsort(-proba.max(1))[: max(1, int(len(y) * c))]]).mean())
+            for c in (0.25, 0.5)},
     }
 
 

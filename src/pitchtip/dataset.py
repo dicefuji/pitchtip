@@ -114,10 +114,13 @@ def extract(key: str, overwrite: bool = False) -> pd.DataFrame:
 
 
 def scan(name: str, seasons: list[int], max_games: int | None, game_types: list[str],
-         workers: int = 8) -> pd.DataFrame:
-    """Labels -> parallel clip download -> pose as each clip lands -> features."""
+         workers: int = 8, keep_last_games: int = 2) -> pd.DataFrame:
+    """Labels -> parallel clip download -> pose as each clip lands -> features.
+    Clips are deleted once their pose file is saved (the pose file keeps the glove crops),
+    except for the last `keep_last_games` games, kept for replay/live demos."""
     key, df = fetch_labels(name, seasons, max_games, game_types)
     hand = df.pitcher_hand.iloc[0]
+    keep_games = set(df.drop_duplicates("game_pk").sort_values("date").game_pk.tail(keep_last_games))
     ready: queue.Queue = queue.Queue(maxsize=64)
 
     def producer():
@@ -142,6 +145,8 @@ def scan(name: str, seasons: list[int], max_games: int | None, game_types: list[
                 continue
             if cp is not None:
                 poses[r.play_id] = cp
+                if r.game_pk not in keep_games and _npz(r).exists():
+                    _clip(r).unlink(missing_ok=True)
     return build_features(key, poses)
 
 

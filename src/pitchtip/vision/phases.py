@@ -34,13 +34,15 @@ def knee_lift(cp: ClipPose, hand: str | None) -> np.ndarray:
 
 
 def segment(cp: ClipPose, hand: str | None, set_seconds: float = 1.2,
-            early_seconds: float = 0.33, rise: float = 0.09) -> Phases | None:
+            early_seconds: float = 0.33, rise: float = 0.075, min_set: int = 1) -> Phases | None:
     lift = knee_lift(cp, hand)
     valid = np.isfinite(lift)
     if valid.sum() < 10:
         return None
     first = int(np.argmax(valid))
-    base = np.nanmedian(lift[first:first + max(int(cp.fps), 5)])
+    # Knee height while standing tall in the set: a low percentile over the clip is robust
+    # to the pitcher still walking / bending at the start of the clip.
+    base = np.nanpercentile(lift, 25)
     above = np.nan_to_num(lift - base, nan=-1) > rise
     # Onset = first time the knee is clearly up for 2 consecutive samples; back up to
     # the start of that rise so the window ends before any real movement.
@@ -51,7 +53,7 @@ def segment(cp: ClipPose, hand: str | None, set_seconds: float = 1.2,
     while onset > first and np.nan_to_num(lift[onset - 1] - base, nan=0) > rise / 3:
         onset -= 1
     set_start = max(first, onset - int(round(set_seconds * cp.fps)))
-    if onset - set_start < 3:
+    if onset - set_start < min_set:
         return None
     early_end = min(len(cp.t), onset + int(round(early_seconds * cp.fps)) + 1)
     h = cp.boxes[set_start:onset, 3] - cp.boxes[set_start:onset, 1]

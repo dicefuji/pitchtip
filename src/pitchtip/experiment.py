@@ -41,7 +41,8 @@ def summarize(y: pd.Series, proba: np.ndarray, classes: list[str]) -> dict:
 
 
 def run(key: str, mode: str = "type", variants=("probs", "knn", "probs+knn", "full"),
-        use_emb: bool = True, jev: bool = True, max_n: int = 400) -> dict:
+        use_emb: bool = True, jev: bool = True, max_n: int = 400,
+        jev_models=("jev-latest", "jev-preview")) -> dict:
     df, hands, emb, y = load(key, mode)
     if not use_emb:
         emb = None
@@ -54,24 +55,35 @@ def run(key: str, mode: str = "type", variants=("probs", "knn", "probs+knn", "fu
     if not jev:
         return res
     tells = find_tells(df[tr], y[tr], top=6)
-    best, best_acc = None, -1
-    for v in variants:
-        jb = JevBehavior(m, df[tr], hands[tr], _sub(emb, tr), y[tr], tells, variant=v)
-        idx = np.flatnonzero(va)[:max_n]
-        out = asyncio.run(jb.predict(jb.evidence(df.iloc[idx], hands[idx], _sub(emb, idx))))
-        P = np.array([[o["probabilities"].get(c, 0) for c in m.classes] for o in out])
-        s = summarize(y.iloc[idx], P, m.classes)
-        s["latency_p50_s"] = round(float(np.median([o["latency_s"] for o in out])), 3)
-        res[f"jev_val_{v}"] = s
-        if s["accuracy"] > best_acc:
-            best, best_acc = v, s["accuracy"]
-    jb = JevBehavior(m, df[tr], hands[tr], _sub(emb, tr), y[tr], tells, variant=best)
+    best, best_key = None, (-1, 0)
+    idx = np.flatnonzero(va)[:max_n]
+    for jm in jev_models:
+        for v in variants:
+            jb = JevBehavior(m, df[tr], hands[tr], _sub(emb, tr), y[tr], tells, variant=v, jev_model=jm)
+            out = asyncio.run(jb.predict(jb.evidence(df.iloc[idx], hands[idx], _sub(emb, idx))))
+            P = np.array([[o["probabilities"].get(c, 0) for c in m.classes] for o in out])
+            s = summarize(y.iloc[idx], P, m.classes)
+            s["latency_p50_s"] = round(float(np.median([o["latency_s"] for o in out])), 3)
+            res[f"jev_val_{jm}_{v}"] = s
+            k = (s["accuracy"], -s["log_loss"])
+            if k > best_key:
+                best, best_key = (jm, v), k
+    # Calibrate the chosen Jev config's probabilities on the validation games.
+    from pitchtip.models.behavior import _temp
+    from scipy.optimize import minimize_scalar
+    jb = JevBehavior(m, df[tr], hands[tr], _sub(emb, tr), y[tr], tells, variant=best[1], jev_model=best[0])
+    outv = asyncio.run(jb.predict(jb.evidence(df.iloc[idx], hands[idx], _sub(emb, idx))))
+    Pv = np.array([[o["probabilities"].get(c, 0) for c in m.classes] for o in outv])
+    yv = np.array([m.classes.index(c) for c in y.iloc[idx]])
+    T = float(minimize_scalar(lambda T: -np.log(np.clip(_temp(Pv, T)[np.arange(len(yv)), yv], 1e-9, 1)).mean(),
+                              bounds=(0.5, 50), method="bounded").x)
+    res["jev_temperature"] = round(T, 2)
     idx = np.flatnonzero(te)[:max_n]
     out = asyncio.run(jb.predict(jb.evidence(df.iloc[idx], hands[idx], _sub(emb, idx))))
-    P = np.array([[o["probabilities"].get(c, 0) for c in m.classes] for o in out])
+    P = _temp(np.array([[o["probabilities"].get(c, 0) for c in m.classes] for o in out]), T)
     s = summarize(y.iloc[idx], P, m.classes)
     toks = sum(o["approx_input_tokens"] for o in out)
-    s |= {"variant": best, "latency_p50_s": round(float(np.median([o["latency_s"] for o in out])), 3),
+    s |= {"variant": best[1], "jev_model": best[0], "latency_p50_s": round(float(np.median([o["latency_s"] for o in out])), 3),
           "usd_per_1k_pitches": round(toks / len(out) * 1000 * 0.042 / 1e6, 4)}
     res["jev_test"] = s
     return res
