@@ -177,6 +177,7 @@ Rolling deployment eval with YOLO11x, Jev with `auto` evidence selection:
 | Scherzer 2025 (documented CH grip) | 530 | 52.1% | 66.4% | **65.7%** |
 | Schmidt 2024 (documented tip) | 554 | 54.9% | 68.0% | **68.6%** |
 | Severino 2018 (documented tip) | 504 | 50.6% | 59.1% | **61.7%** |
+| Yamamoto 2024 (documented tip, postseason) | 482 | 53.1% | 61.0% | **59.5%** |
 | Glasnow 2020 (after his fix) | 324 | 63.9% | 72.8% | **74.4%** (lift +10.5 vs +17.1 in 2019) |
 | Luzardo 2025 (documented tip) | 1002 | 58.1% | 62.6% | **62.7%** |
 | Gallen 2025 | 474 | 55.3% | 62.0% | **61.4%** |
