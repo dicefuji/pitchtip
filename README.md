@@ -36,6 +36,9 @@ broadcast clip / stream
 - Mason Miller, 2026 NLDS G2 (the alleged-tipping game): **78%**, against a 51% base rate. All 7
   STRONG calls were correct.
 
+**YouTube** (Mason Miller, three full innings, never seen in training): **29/39 (74%)**,
+against a 69% base rate. **STRONG calls 8/9 (89%).** See `docs/TIPPING.md`.
+
 Jev costs about $0.003 per 1,000 pitches and answers in ~0.1–0.2 s.
 
 ## Data (no keys needed)
@@ -60,6 +63,7 @@ uv run pitchtip demo "Tyler Glasnow 2019" --game 599341 --mode fb
 uv run pitchtip reel "Tyler Glasnow 2019" 599341 --out g5.mp4
 uv run pitchtip live g5.mp4 "Tyler Glasnow 2019" --mode fb --train-before 2019-10-10
 uv run pitchtip live "https://…stream…" "Tyler Glasnow 2019"     # any yt-dlp-readable stream
+uv run pitchtip ytest video.mp4 "Mason Miller 2026" 823253 --out out/   # score a video vs the MLB feed
 ```
 
 ## Honest caveats

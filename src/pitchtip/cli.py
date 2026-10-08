@@ -323,7 +323,8 @@ def ytest(video: str, key: str, game: int, out: str = typer.Option(..., help="ou
     feed = youtube.feed_pitches(game, int(pf.pitcher_id.iloc[0]))
     feed["label"] = make_labels(feed.pitch_type, mode) if mode == "fb" else feed.pitch_type.where(
         feed.pitch_type.isin(pr.model.classes), "OTHER")
-    off, match = youtube.align(np.array([c["t"] for c, _, _ in calls]), feed.t.to_numpy())
+    off, _ = youtube.align(np.array([c["t"] for c, _, _ in calls]), feed.t.to_numpy())
+    match = youtube.align_dp(np.array([c["t"] for c, _, _ in calls]), feed.t.to_numpy())
     rows = []
     for i, (c, cp, ph) in enumerate(calls):
         j = match.get(i)
@@ -349,6 +350,45 @@ def ytest(video: str, key: str, game: int, out: str = typer.Option(..., help="ou
                "offset_s": round(off, 1)}
     (od / "summary.json").write_text(json.dumps(summary, indent=1))
     typer.echo(json.dumps(summary, indent=1))
+
+
+@app.command()
+def yrescore(out: str, key: str, game: int, mode: str = "type", label: str = ""):
+    """Re-align saved YouTube calls with the feed and re-render (no video processing)."""
+    from pathlib import Path
+    from pitchtip import config, youtube
+    from pitchtip.config import slug
+    from pitchtip.vision import phases, pose
+    od = Path(out)
+    rows = json.loads((od / "calls.json").read_text())
+    pf = pd.read_parquet(config.FEATURES_DIR / f"{slug(key)}.parquet")
+    feed = youtube.feed_pitches(game, int(pf.pitcher_id.iloc[0]))
+    classes = sorted(set(pf.pitch_type.value_counts(normalize=True).loc[lambda v: v >= 0.05].index))
+    feed["label"] = feed.pitch_type.where(feed.pitch_type.isin(classes), "OTHER")
+    match = youtube.align_dp(np.array([r["video_t"] for r in rows]), feed.t.to_numpy())
+    hand = pf.pitcher_hand.iloc[0]
+    for r in rows:
+        j = match.get(r["i"])
+        r.update(matched=j is not None, actual=feed.label.iloc[j] if j is not None else None,
+                 batter=feed.batter.iloc[j] if j is not None else None, count=feed["count"].iloc[j] if j is not None else None)
+        fr, pz = od / f'call_{r["i"]:03d}_frame.npy', od / f'call_{r["i"]:03d}_pose.npz'
+        if fr.exists() and pz.exists():
+            cp = pose.ClipPose.load(pz)
+            ph = phases.segment(cp, hand)
+            if ph is not None:
+                youtube.render(np.load(fr), cp, ph, r, r["actual"], od / f'call_{r["i"]:03d}.jpg',
+                               f'{label or key}  t={r["video_t"]:.0f}s' + (f'  {r["batter"]} (count after: {r["count"]})' if j is not None else ""))
+    df = pd.DataFrame(rows)
+    df.to_json(od / "calls.json", orient="records", indent=1)
+    m = df[df.matched & (df.actual != "OTHER")]
+    st = m[m.strong]
+    s = json.loads((od / "summary.json").read_text())
+    s.update(matched=int(df.matched.sum()), unmatched_detections=int((~df.matched).sum()),
+             accuracy=round(float((m.call == m.actual).mean()), 3), base_rate=round(float(m.actual.value_counts(normalize=True).max()), 3),
+             strong_calls=len(st), strong_accuracy=round(float((st.call == st.actual).mean()), 3) if len(st) else None,
+             alignment="order-preserving DP")
+    (od / "summary.json").write_text(json.dumps(s, indent=1))
+    typer.echo(json.dumps(s, indent=1))
 
 
 @app.command()

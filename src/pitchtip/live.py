@@ -38,7 +38,7 @@ def run(src: str, predictor, target_fps: float = 15.0, buffer_seconds: float = 4
     step = max(int(round(fps / target_fps)), 1)
     n = int(buffer_seconds * target_fps)
     buf = collections.deque(maxlen=n)
-    prev_box, cooldown_until, i = None, -1.0, 0
+    prev_box, cooldown_until, i, prev_gray = None, -1.0, 0, None
     log_f = open(log, "a") if log else None
     hand = predictor.hand
     while True:
@@ -52,6 +52,10 @@ def run(src: str, predictor, target_fps: float = 15.0, buffer_seconds: float = 4
         if not ok:
             break
         t = i / fps
+        small = cv2.cvtColor(cv2.resize(frame, (320, 180)), cv2.COLOR_BGR2GRAY)
+        if pose.is_hard_cut(prev_gray, small):
+            buf.clear(); prev_box = None  # camera cut: never let one delivery span two shots
+        prev_gray = small
         kp, box = pose.pose_frame(frame, prev_box)
         if kp is None:
             buf.clear(); prev_box = None

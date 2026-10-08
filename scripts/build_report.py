@@ -23,7 +23,7 @@ def pct(x):
     return f"{100 * x:.0f}%"
 
 
-def prob_strip(calls, w=720, h=210):
+def prob_strip(calls, w=720, h=226):
     """SVG: per call, P(SL) from Jev (bar) and vision (dot); actual marked below."""
     n = max(len(calls), 1)
     pad_l, pad_r, top, ph = 46, 12, 14, 130
@@ -44,7 +44,7 @@ def prob_strip(calls, w=720, h=210):
         yb, yt = (y(0.5), y(pj)) if pj >= 0.5 else (y(pj), y(0.5))
         tip = (f'#{i + 1} {c.get("batter") or ""} {c.get("count") or ""}: Jev SL {pct(pj)}, vision SL {pct(pv)}'
                f' · call {c["call"]} · actual {c.get("actual") or "unmatched"}')
-        g.append(f'<g class="col"><title>{esc(tip)}</title>'
+        g.append(f'<g class="col{"" if c.get("actual") else " dim"}"><title>{esc(tip)}</title>'
                  f'<rect x="{x0:.1f}" y="{top}" width="{cw:.1f}" height="{h - top}" class="hit"/>'
                  f'<rect x="{x0 + (cw - bw) / 2:.1f}" y="{min(yb, yt):.1f}" width="{bw:.1f}" height="{max(abs(yb - yt), 1.5):.1f}" rx="2" class="{cls}"/>'
                  f'<circle cx="{x0 + cw / 2:.1f}" cy="{y(pv):.1f}" r="3.6" class="vis"/>')
@@ -108,7 +108,7 @@ for d, title, when, yt, blurb in VIDEOS:
     all_m += len(m); all_ok += ok; all_strong += len(st); strong_ok += sum(c["call"] == c["actual"] for c in st)
     if m:
         base_num += max(sum(c["actual"] == "FF" for c in m), sum(c["actual"] == "SL" for c in m))
-    cards = []
+    cards, extra = [], []
     for c in calls:
         src = p / f'call_{c["i"]:03d}.jpg'
         if not src.exists():
@@ -119,11 +119,15 @@ for d, title, when, yt, blurb in VIDEOS:
         cv2.imwrite(str(OUT / "img" / name), im, [cv2.IMWRITE_JPEG_QUALITY, 78])
         a = c.get("actual")
         verdict = "" if not a or a == "OTHER" else ("hit" if a == c["call"] else "miss")
-        cards.append(f'<figure class="card {verdict}"><img loading="lazy" src="img/{name}" alt="Call {c["i"] + 1}: {c["call"]}, actual {a or "unmatched"}">'
-                     f'<figcaption><span class="n">#{c["i"] + 1}</span> <b>{esc(c.get("batter") or "unmatched detection")}</b> {esc(c.get("count") or "")}'
+        who = esc(c.get("batter") or "no pitch in feed (replay?)")
+        cnt = ("count after " + esc(c["count"])) if c.get("count") else ""
+        acttag = ('<span class="tag act">actual ' + a + "</span>") if a else ""
+        strongtag = "<span class=st>STRONG</span>" if c["strong"] else ""
+        (cards if a else extra).append(f'<figure class="card {verdict}"><img loading="lazy" src="img/{name}" alt="Call {c["i"] + 1}: {c["call"]}, actual {a or "unmatched"}">'
+                     f'<figcaption><span class="n">#{c["i"] + 1}</span> <b>{who}</b> {cnt}'
                      f'<span class="tag {c["call"].lower()}">call {c["call"]}</span>'
-                     f'<span class="tag act">{"actual " + a if a else "no pitch in feed"}</span>'
-                     f'{"<span class=st>STRONG</span>" if c["strong"] else ""}</figcaption></figure>')
+                     f'{acttag}'
+                     f'{strongtag}</figcaption></figure>')
     acc = ok / len(m) if m else 0
     base = (max(sum(c["actual"] == "FF" for c in m), sum(c["actual"] == "SL" for c in m)) / len(m)) if m else 0
     sections.append(f'''
@@ -132,6 +136,7 @@ for d, title, when, yt, blurb in VIDEOS:
   <dl class="chips"><div><dt>called</dt><dd>{ok}/{len(m)}</dd></div><div><dt>accuracy</dt><dd>{pct(acc)}</dd></div><div><dt>base rate</dt><dd>{pct(base)}</dd></div><div><dt>STRONG</dt><dd>{sum(c["call"] == c["actual"] for c in st)}/{len(st)}</dd></div><div><dt>pitches in feed</dt><dd>{s["pitches_in_feed"]}</dd></div></dl></header>
   <div class="chart"><div class="legend"><span><i class="sw sl"></i>Jev P(slider), bar up</span><span><i class="sw ff"></i>Jev P(fastball), bar down</span><span><i class="dot"></i>vision model</span><span>★ STRONG call</span></div>{prob_strip(calls)}</div>
   <div class="film">{"".join(cards)}</div>
+  {f'<details class="extra"><summary>{len(extra)} detections with no pitch in the feed (replays, cutaways), not scored</summary><div class="film">{"".join(extra)}</div></details>' if extra else ""}
 </section>''')
 
 rows = {}
@@ -205,8 +210,8 @@ svg text {{ font-family:var(--body); }} .ax {{ fill:var(--muted); font-size:11px
 .grid {{ stroke:var(--line); stroke-width:1 }} .mid {{ stroke:var(--muted); stroke-width:1; stroke-dasharray:3 3 }}
 rect.sl {{ fill:var(--sl) }} rect.ff {{ fill:var(--ff) }} .vis {{ fill:var(--ink); stroke:var(--surface); stroke-width:1.5 }}
 .hit {{ fill:transparent }} .col:hover .hit, .row:hover .hit {{ fill:var(--soft) }}
-.act {{ font:600 12px var(--body) }} .slt {{ fill:var(--sl) }} .fft {{ fill:var(--ff) }}
-.ok {{ fill:var(--ok); font-size:14px }} .bad {{ fill:var(--bad); font-size:14px }} .strong {{ fill:var(--gold); font-size:13px }}
+.act {{ font:600 10px var(--body) }} .dim {{ opacity:.32 }} .extra {{ display:grid; gap:10px }} .slt {{ fill:var(--sl) }} .fft {{ fill:var(--ff) }}
+.ok {{ fill:var(--ok); font-size:12px }} .bad {{ fill:var(--bad); font-size:12px }} .strong {{ fill:var(--gold); font-size:12px }}
 .film {{ display:grid; grid-auto-flow:column; grid-auto-columns:minmax(300px,46%); gap:12px; overflow-x:auto; padding-bottom:8px; scroll-snap-type:x mandatory }}
 .card {{ margin:0; background:var(--soft); border-radius:10px; overflow:hidden; scroll-snap-align:start; border-top:3px solid var(--line); min-width:0 }}
 .card.hit {{ border-top-color:var(--ok) }} .card.miss {{ border-top-color:var(--bad) }}
@@ -302,7 +307,7 @@ details summary {{ cursor:pointer; color:var(--muted); font-size:13px }} pre {{ 
 <section>
   <span class="eyebrow">limits</span><h2>What this does not show</h2>
   <ul class="caveats">
-    <li>The YouTube runs are one pitcher in three innings. Treat them as a demonstration. The rolling evaluation over ~10,000 pitches is the reliable number.</li>
+    <li>The YouTube runs are one pitcher in three innings. Treat them as a demonstration. The rolling evaluation over {pooled_n:,} later-game pitches is the reliable number.</li>
     <li>Tips are personal and seasonal. Each model is per pitcher-season and needs retraining as games come in.</li>
     <li>Only what the center-field camera sees can be learned. Glove-face and mouth tells need a front view.</li>
     <li>A detection that matches no pitch in the feed (a replay or a pickoff move) is shown but not scored.</li>

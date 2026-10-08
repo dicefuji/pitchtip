@@ -62,6 +62,43 @@ def align(call_t: np.ndarray, pitch_t: np.ndarray, tol: float = 4.0) -> tuple[fl
     return best, match
 
 
+def align_dp(call_t: np.ndarray, pitch_t: np.ndarray, tol: float = 3.0, jump_penalty: float = 1.6,
+             min_gap: float = 6.0) -> dict[int, int]:
+    """Order-preserving alignment for edited videos (cuts, inserted replays).
+
+    Matches calls to pitches in order. Consecutive matches must share the video→feed
+    offset within `tol`, except at an editing cut, where the offset may jump forward
+    (feed time skipped) at a cost of `jump_penalty` matches. It never jumps backward.
+    """
+    C, P = len(call_t), len(pitch_t)
+    off = pitch_t[None, :] - call_t[:, None]           # (C, P)
+    best = np.full((C, P), -np.inf)
+    back = np.full((C, P, 2), -1, int)
+    for i in range(C):
+        for j in range(P):
+            best[i, j] = 1.0
+            for i2 in range(i):
+                for j2 in range(j):
+                    if not np.isfinite(best[i2, j2]):
+                        continue
+                    d = off[i, j] - off[i2, j2]
+                    if abs(d) <= tol:
+                        sc = best[i2, j2] + 1
+                    elif d > tol and (pitch_t[j] - pitch_t[j2]) >= min_gap:
+                        sc = best[i2, j2] + 1 - jump_penalty
+                    else:
+                        continue
+                    if sc > best[i, j]:
+                        best[i, j] = sc
+                        back[i, j] = (i2, j2)
+    i, j = np.unravel_index(np.argmax(best), best.shape)
+    match = {}
+    while i >= 0 and j >= 0:
+        match[int(i)] = int(j)
+        i, j = back[i, j]
+    return match
+
+
 def _bars(img, x, y, w, title, probs: dict, h_bar=26):
     cv2.putText(img, title, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (230, 230, 230), 1, cv2.LINE_AA)
     y += 12
@@ -135,7 +172,7 @@ def run(video: str, predictor, out_dir: Path, target_fps: float = 15.0, buffer_s
     step = max(int(round(fps / target_fps)), 1)
     n = int(buffer_seconds * target_fps)
     buf = collections.deque(maxlen=n)
-    prev_box, cooldown, i, calls = None, -1.0, 0, []
+    prev_box, cooldown, i, calls, prev_gray = None, -1.0, 0, [], None
     hand = predictor.hand
     while cap.grab():
         i += 1
@@ -145,6 +182,10 @@ def run(video: str, predictor, out_dir: Path, target_fps: float = 15.0, buffer_s
         if not ok:
             break
         t = i / fps
+        gray = cv2.cvtColor(cv2.resize(frame, (320, 180)), cv2.COLOR_BGR2GRAY)
+        if pose.is_hard_cut(prev_gray, gray):
+            buf.clear(); prev_box = None  # camera cut: never let one delivery span two shots
+        prev_gray = gray
         kp, box = pose.pose_frame(frame, prev_box, weights=pose.FAST_WEIGHTS)
         if kp is None:
             buf.clear(); prev_box = None

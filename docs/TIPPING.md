@@ -232,3 +232,25 @@ feature window (1.2 s before the leg lift) starts after that. Fixes tested (roll
 The "coming set" features are kept. They cover the gripping-while-coming-set tell class, and
 the stacked experts can down-weight them for pitchers who don't tip there. Strasburg
 across the season (rolling, local model): **70.1% vs a 54.1% base rate.**
+
+## YouTube test: Mason Miller, three full broadcast innings (behavior only)
+`pitchtip ytest` runs a pose cascade on any broadcast video. YOLO11n tracks the pitcher at
+~6 ms/frame. When it sees a leg lift, YOLO11x re-reads the buffered set and lift (~1.6 s,
+batched). Calls are scored against the MLB feed with an order-preserving time alignment.
+Each model was trained only on games before the video's date.
+
+| video | correct | accuracy | base rate | STRONG calls |
+|---|---|---|---|---|
+| vs NYY, Sep 6 2026 (save #33) | 8/11 | 73% | 64% | 3/3 |
+| vs ATL, Jun 22 2026 (1-0 save) | 10/14 | 71% | 86% | 4/5 |
+| NLDS G2 @ MIL, Oct 4 2026 (9th inning) | 11/14 | 79% | 57% | 1/1 |
+| **total** | **29/39** | **74%** | 69% | **8/9 (89%)** |
+
+- Coverage was partial: 39 of ~66 pitches had a clean CF set position on screen.
+- 17 detections matched no pitch (replays, cutaways) and are not scored. A camera-cut
+  guard is now in the live/YouTube loops to prevent these.
+- The June inning was almost all sliders, so "always slider" beat the overall call rate there.
+  STRONG calls are where the system is reliable.
+
+![rolling accuracy](img/rolling_accuracy.png)
+![lift](img/jev_lift.png)
