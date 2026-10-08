@@ -119,6 +119,10 @@ class Predictor:
         final = out.get("jev", out["vision"])
         out["call"] = max(final, key=final.get)
         out["confidence"] = final[out["call"]]
+        # Jev's own confidence is polarized; the calibrated vision model's belief in the call
+        # is the better guide to which calls to act on.
+        out["trust"] = out["vision"].get(out["call"], 0.0)
+        out["strong"] = out["trust"] >= getattr(self.model, "strong_threshold", 1.0)
         return out
 
     def predict_clip(self, clip) -> dict | None:

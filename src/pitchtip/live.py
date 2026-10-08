@@ -78,9 +78,11 @@ def run(src: str, predictor, target_fps: float = 15.0, buffer_seconds: float = 4
         dt = time.perf_counter() - t0
         probs = out.get("jev") or out["vision"]
         msg = {"t": round(float(ts[ph.onset]), 2), "call": out["call"],
-               "confidence": round(out["confidence"], 3),
+               "confidence": round(out["confidence"], 3), "trust": round(out["trust"], 3),
+               "strong": bool(out["strong"]),
                "proba": {k: round(v, 3) for k, v in probs.items()}, "decide_ms": round(dt * 1000)}
-        print(f"[{msg['t']:7.2f}s] leg lift → {out['call']:>4} ({out['confidence']:.0%})  " +
+        flag = "STRONG" if out["strong"] else "      "
+        print(f"[{msg['t']:7.2f}s] leg lift → {out['call']:>8} {flag} trust {out['trust']:.0%}  " +
               "  ".join(f"{k}:{v:.0%}" for k, v in sorted(probs.items(), key=lambda kv: -kv[1])[:4]) +
               f"   [{msg['decide_ms']} ms]", flush=True)
         if log_f:

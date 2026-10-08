@@ -173,8 +173,8 @@ def demo(key: str, game: str = typer.Option("last", help="gamePk or 'last'"), n:
         ok = out["call"] == truth
         hits += ok
         top = sorted((out.get("jev") or out["vision"]).items(), key=lambda kv: -kv[1])[:3]
-        typer.echo(f"  inn {r.inning} AB {r.at_bat:>2} p{r.pitch_number}:  call {out['call']:>4} "
-                   f"({out['confidence']:.0%})  actual {truth:>4}  {'✓' if ok else '✗'}   "
+        typer.echo(f"  inn {r.inning} AB {r.at_bat:>2} p{r.pitch_number}:  call {out['call']:>8} "
+                   f"{'STRONG' if out['strong'] else '      '} trust {out['trust']:.0%}  actual {truth:>8}  {'✓' if ok else '✗'}   "
                    + " ".join(f"{k}:{v:.0%}" for k, v in top))
         if len(cp.glove):
             g = cv2.resize(cp.glove[max(0, len(cp.glove) - 8)], (160, 160))
@@ -242,7 +242,9 @@ def rolling(keys: list[str], mode: str = "fb", variant: str = "auto",
                 s = r[name]
                 typer.echo(f"{k:24s} {name:5s} n={s['n']:4d} acc={s['accuracy']:.3f} base={s['base_rate']:.3f} "
                            f"auc={np.mean(list(s['auc_one_vs_rest'].values())):.3f} "
-                           f"top25={s['selective_accuracy']['top25pct']:.3f} top50={s['selective_accuracy']['top50pct']:.3f}")
+                           f"top25={s['selective_accuracy']['top25pct']:.3f} top50={s['selective_accuracy']['top50pct']:.3f}"
+                           + (f"  gated25={r['jev_gated']['top25pct']:.3f} gated50={r['jev_gated']['top50pct']:.3f}"
+                              if name == "jev" and "jev_gated" in r else ""))
 
 
 @app.command()

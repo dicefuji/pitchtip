@@ -103,6 +103,7 @@ class BehaviorModel:
             # Track record on held-out games: how often the call was right at each confidence.
             pc = _temp(pm, self.temperature)
             conf, hit = pc.max(1), pc.argmax(1) == yi
+            self.strong_threshold = float(np.quantile(conf, 0.75))  # top-quartile confidence
             edges = [0.0, 0.55, 0.65, 0.75, 0.85, 1.01]
             self.reliability = {
                 f"{lo:.2f}-{min(hi, 1):.2f}": {"calls": int(((conf >= lo) & (conf < hi)).sum()),

@@ -117,7 +117,14 @@ def rolling(key: str, mode: str = "fb", test_frac: float = 0.4, blocks: int = 5,
     res = {"key": key, "mode": mode, "n_test": len(yy), "test_games": len(test_games),
            "local": summarize(yy, np.vstack(P_loc), classes)}
     if jev:
-        res["jev"] = summarize(yy, np.vstack(P_jev), classes) | {
+        PJ, PL = np.vstack(P_jev), np.vstack(P_loc)
+        call = PJ.argmax(1)
+        gate = PL[np.arange(len(call)), call]   # local model's belief in Jev's call
+        hit = np.array(classes)[call] == yy.to_numpy()
+        order = np.argsort(-gate)
+        res["jev_gated"] = {f"top{int(c * 100)}pct": float(hit[order[: max(1, int(len(hit) * c))]].mean())
+                            for c in (0.25, 0.5, 0.75)}
+        res["jev"] = summarize(yy, PJ, classes) | {
             "variant": variant if variant != "auto" else "auto:" + ",".join(chosen), "jev_model": jev_model}
     return res
 
