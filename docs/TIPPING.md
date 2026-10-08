@@ -169,9 +169,22 @@ Rolling deployment eval with YOLO11x, Jev with `auto` evidence selection:
 | pitcher | n | base | local | **Jev** |
 |---|---|---|---|---|
 | Glasnow 2019 | 210 | 71.0% | 88.6% | **88.1%** |
+| Fried 2025 | 561 | 55.1% | 72.6% | **72.7%** |
 | Peralta 2025 | 462 | 53.5% | 71.0% | **70.4%** |
 | Darvish 2017 | 475 | 68.2% | 70.3% | **69.9%** |
 | Helsley 2025 | 375 | 53.6% | 69.6% | **69.1%** |
+| Rodón 2025 | 525 | 52.2% | 67.0% | **68.2%** |
+
+Gating Jev's calls by the calibrated vision model's belief in the call, the top quarter of calls
+are right 82–94% of the time (Glasnow 94%, Fried 88%, Peralta 86%, Helsley 85%, Rodón 82%).
+
+Exact pitch type (full arsenal), rolling, YOLO11x:
+
+| pitcher | arsenal | base | local | **Jev** | Jev top-25% (gated) |
+|---|---|---|---|---|---|
+| Glasnow 2019 | FF/CU | 71.0% | 88.6% | **90.0%** | 94.2% |
+| Helsley 2025 | FF/SL/CU | 46.9% | 62.9% | **63.7%** | 84.9% |
+| Peralta 2025 | 5 pitches | 48.6% | 56.1% | **54.1%** | 81.8% |
 
 `auto` picks Jev's evidence variant on the most recent training games: plain vision probabilities
 when the signal is weak, plus track record or similar deliveries when it is strong.
