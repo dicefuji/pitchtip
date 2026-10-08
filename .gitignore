@@ -5,3 +5,5 @@ __pycache__/
 data/
 *.pt
 .pytest_cache/
+data_*/
+*.part
