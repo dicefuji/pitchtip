@@ -19,6 +19,7 @@ broadcast clip / stream
 | pitcher | FB/offspeed base | **Jev** | Jev top-25% (trust-gated) |
 |---|---|---|---|
 | Tyler Glasnow 2019 (documented tip) | 71.0% | **88.1%** (exact pitch type: 90.0%) | 94% |
+| Mason Miller 2026 (alleged tip) | 54.1% | **78.3%** | 95% |
 | Max Fried 2025 | 55.1% | **72.7%** | 88% |
 | Freddy Peralta 2025 | 53.5% | **70.4%** | 86% |
 | Yu Darvish 2017 | 68.2% | **69.9%** | — |

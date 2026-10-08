@@ -169,6 +169,7 @@ Rolling deployment eval with YOLO11x, Jev with `auto` evidence selection:
 | pitcher | n | base | local | **Jev** |
 |---|---|---|---|---|
 | Glasnow 2019 | 210 | 71.0% | 88.6% | **88.1%** |
+| **Mason Miller 2026 (alleged tip, NLDS G2)** | 488 | 54.1% | 78.9% | **78.3%** (largest lift: +24 pts; gated top-25% 95%) |
 | Fried 2025 | 561 | 55.1% | 72.6% | **72.7%** |
 | Peralta 2025 | 462 | 53.5% | 71.0% | **70.4%** |
 | Darvish 2017 | 475 | 68.2% | 70.3% | **69.9%** |
