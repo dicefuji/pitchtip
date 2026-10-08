@@ -1,178 +1,208 @@
 # pitchtip
 
-Predict a pitcher's next pitch from **body language alone**: the set position, glove and
-hand position, arm angles, and the first instant of the leg lift. It uses no count, runners,
-or game situation. Video becomes pose and glove-image evidence locally, and a cheap
-decision model, [Jev](https://typesafe.ai) by TypeSafe AI, makes the call.
+pitchtip guesses a pitcher's next pitch from video of the pitcher before he throws.
+It looks at his set position, his glove and hands, his arm angles, and the start of his leg
+lift. It does not use the count, the runners, or any other game information.
 
-It works on Baseball Savant clips, recorded games, and YouTube or other streams.
+The video is turned into body measurements on your own computer. Then
+[Jev](https://typesafe.ai), a cheap and fast decision model from TypeSafe AI, makes the call.
 
-```
-broadcast clip / stream
-  → pose cascade: YOLO11n tracks the pitcher every frame (~6 ms); YOLO11x re-reads the
-    set + lift in small batches as frames arrive
-  → phase segmentation: coming set → set → leg-lift onset (everything ends before release)
-  → behavior features: arm angles, hand/glove/head trajectories, set duration, elbow spread
-    + DINOv2 embedding of the glove region (grip, glove shape, ball visibility)
-  → stacked expert models (body trees · glove appearance · linear posture), calibrated
-  → Jev Choice question: expert opinions, their track record, similar past deliveries, tells
-  → call + calibrated trust + STRONG flag (top-quartile trust)
-```
+It works on Baseball Savant clips, recorded games, and YouTube or other video streams.
 
-## Findings
+![Annotated call: slider, called correctly](docs/img/call_yankees_sl_strong.jpg)
+*One call from a YouTube video of Mason Miller. Left: the frame where his leg lift started.
+Right: the glove area the model looked at, Jev's probabilities, and the vision model's probabilities.*
 
-All numbers are behavior-only. Models are per pitcher-season and are always tested on games
-they were not trained on.
+## How it works
 
-### 1. Most pitchers are readable from body language
-Rolling evaluation: each later block of games is predicted from all earlier games, the way
-the system would run during a season. The task is fastball vs offspeed, over 20
-pitcher-seasons and ~9,500 test pitches.
+1. A small pose model (YOLO11n) finds the pitcher in every frame. A larger, more accurate
+   pose model (YOLO11x) then measures his body during the set and the start of the leg lift.
+2. pitchtip measures arm angles, hand, glove and head positions over time, how long he holds
+   the set, and how far his elbows stick out. It also builds an image fingerprint of the glove
+   area with DINOv2 to capture the grip, the glove shape, and whether the ball shows.
+3. Three small models each give an opinion: one on body movement, one on the glove image,
+   and one on simple posture.
+4. Jev gets one multiple-choice question. The options are the pitcher's pitches. The question
+   comes with the three opinions, how reliable each has been for this pitcher, the 25 most
+   similar past deliveries, and his known tells. Jev returns a probability for each pitch.
+5. Each call gets a trust score. The top 25% of calls by trust are marked STRONG.
+
+## Results
+
+All results use body language only, and every test is on games the model never trained on.
+
+### Most pitchers can be read from their body language
+
+We tested 20 pitcher-seasons, about 9,500 pitches, on fastball vs offspeed. Each later
+group of games was predicted using only earlier games, the same way it would run during a
+season.
 
 | | accuracy |
 |---|---|
-| always guess the most common pitch | 57% |
-| **Jev (pooled)** | **68%** |
-| Jev, top-quartile trust calls only | 80–95% depending on pitcher |
+| always guess the pitcher's most common pitch | 57% |
+| **Jev** | **68%** |
+| Jev, STRONG calls only | 80–95%, depending on the pitcher |
 
-| most readable | base | Jev | | least readable | base | Jev |
+![Accuracy by pitcher](docs/img/rolling_accuracy.png)
+
+| easiest to read | base rate | Jev | | hardest to read | base rate | Jev |
 |---|---|---|---|---|---|---|
 | Tyler Glasnow 2019 | 71% | **88%** | | Garrett Crochet 2025 | 75% | 74% |
 | Mason Miller 2026 | 54% | **78%** | | Yusei Kikuchi 2025 | 62% | 64% |
 | Ryan Helsley 2024 | 54% | **75%** | | Yoshinobu Yamamoto 2024 | 53% | 60% |
 | Max Fried 2025 | 55% | **73%** | | Zac Gallen 2025 | 55% | 61% |
 
-Exact pitch type (full arsenal): Glasnow 90% (base 71%), Helsley 64% over 3 pitches
-(base 47%), Fried 31% over 6 pitches (base 21%). Full tables are in
-[`docs/TIPPING.md`](docs/TIPPING.md). Charts: [`docs/img/`](docs/img).
+Calling the exact pitch type instead of fastball vs offspeed: Glasnow 90% (base rate 71%),
+Helsley 64% across 3 pitches (base 47%), Fried 31% across 6 pitches (base 21%).
 
-### 2. It rediscovers documented tips on its own
-- **Glasnow 2019.** His glove sat higher before fastballs (he confirmed it). Without being
-  told, the top-ranked tell was "glove-hand height in the set high → fastball 79% vs 68%."
-  In 2020, after his reported fix, his tell weakened (AUC 0.93 → 0.75).
-- **Helsley 2025.** The reported "arm tick coming set" shows up as glove-elbow flare in the set.
-- **Mason Miller, 2026 NLDS G2** (alleged tipping). Replaying the game: 29/37 correct
-  (base 51%), and 7/7 STRONG calls correct.
-- **Missed: Strasburg, 2019 WS G6.** His tell, reaching into the glove *before* coming set,
-  happened outside the original feature window (1st inning 6/12). Fixed by adding "coming
-  set" features.
+### It finds known tips without being told about them
 
-### 3. League-wide patterns
-Out of 15 pitcher-seasons, **every one had at least one statistically significant tell**
-(FDR q<0.01). The most common kinds are glove-arm and throwing-arm **elbow angle**, then
-hand and glove height. Tells are spread across the set, the last frames before the lift,
-and the first instant of the lift. Watching only the static set position misses many of them.
+- **Tyler Glasnow, 2019.** He confirmed that his glove sat higher before fastballs. With no hints,
+  pitchtip's top tell for him was "glove hand high in the set means fastball 79% of the time,
+  vs 68% overall." In 2020, after he fixed it, he became much harder to read (AUC 0.93 to 0.75).
+- **Ryan Helsley, 2025.** He was reported to have an arm movement when coming set. pitchtip's top
+  tell for him was how far his glove elbow sticks out in the set.
+- **Mason Miller, 2026 NLDS Game 2.** Brewers hitters were accused of reading his glove. Replaying
+  that game, pitchtip got 29 of 37 pitches right (base rate 51%), and all 7 STRONG calls were right.
+- **Stephen Strasburg, 2019 World Series Game 6.** pitchtip missed this one at first (6 of 12 in the
+  first inning). His tell happened while he was bringing his hands into the set, which was before
+  the part of the video we were looking at. We added features for that phase.
 
-### 4. Clips and live streams
-| test | correct | base rate | STRONG |
+### Patterns across pitchers
+
+Every one of the 15 pitcher-seasons we checked had at least one tell that was statistically
+significant. The most common tell was elbow angle, on the glove arm or the throwing arm.
+Hand and glove height came next. Tells showed up in the set, in the last moments before the
+leg lift, and at the start of the lift, so watching only the set position misses some.
+
+### YouTube videos and live streams
+
+We ran pitchtip on full innings of Mason Miller from YouTube and scored each call against the
+real pitch from the MLB game data.
+
+![Pitch by pitch, NLDS Game 2](docs/img/nlds_g2_strip.png)
+
+| test | correct | base rate | STRONG calls |
 |---|---|---|---|
-| Glasnow, 2019 ALDS G5 (stitched into one video; YOLO11m run, YOLO11x got 32/36) | 33/35 (94%) | 68% | 7/7 offspeed calls |
-| Peralta, 2025-09-22 (stitched) | 46/66 (70%) | 55% | |
-| **Mason Miller, 3 YouTube innings** (after lift starts) | **29/39 (74%)** | 69% | 8/9 |
-| **Mason Miller, same innings, called *before* the leg lift** | **28/38 (74%)** | 68% | 10/13 |
+| Mason Miller, 3 YouTube innings, called after the lift starts | **29/39 (74%)** | 69% | 8/9 |
+| Mason Miller, same innings, called **before** the leg lift | **28/38 (74%)** | 68% | 10/13 |
+| Garrett Crochet, first Red Sox start (trained on his other 2025 games) | 16/19 (84%) | 84% | 4/4 |
+| Tyler Glasnow, 2019 ALDS Game 5 (clips joined into one video) | 33/35 (94%) | 68% | 7/7 offspeed calls |
+| Freddy Peralta, Sept 22 2025 (clips joined into one video) | 46/66 (70%) | 55% | |
 
-- Live mode runs straight from a stream URL at ~1.9x real time on an Apple-silicon laptop.
-- Pre-lift calls are ready a median **0.17 s before the leg lift** (~1.2–1.6 s before release).
-- Across the five most readable pitchers, set-only calls cost about 6 points on the rolling
-  eval but stay 13–19 points over base.
+- Live mode reads straight from a stream link. It ran about 1.9 times faster than real time on an
+  Apple-silicon laptop.
+- In before-the-lift mode, the call is ready about 0.17 seconds before the leg lift starts. That
+  is about 1.2 to 1.6 seconds before the ball is thrown.
+- Calling before the lift costs about 6 points of accuracy on average for the five easiest
+  pitchers to read. It still beats the base rate by 13 to 19 points.
+- Crochet throws a fastball most of the time, so pitchtip only matched his base rate. Its STRONG
+  calls were still right.
 
-### 5. How Jev is used
-- Jev does not see pixels. Each pitch is one `Choice` question whose criteria are the
-  pitcher's arsenal. The state carries the expert models' probabilities, how reliable each
-  has been for this pitcher, the 25 most similar past deliveries, and the known tells.
-  A real request and response is in [`docs/jev_example.json`](docs/jev_example.json).
-- **Evidence is chosen per pitcher automatically.** Plain probabilities work best when the
-  signal is weak. Track record and similar deliveries help when it is strong.
-- **Jev's own confidence is polarized** (almost always near 0 or 1). Rank calls by the
-  calibrated vision model's belief in Jev's pick instead; the STRONG flag does this.
-- Cost: ~2k input tokens per call ≈ **$0.003 per 1,000 pitches**, 0.1–0.2 s per decision.
-- Honest comparison: Jev matches the free local model's accuracy. It never meaningfully
-  beat it, because it can only weigh evidence the vision pipeline provides.
+![A missed call](docs/img/call_yankees_miss.jpg)
+*A miss: pitchtip called a slider and he threw a fastball. The vision model leaned fastball, but
+Jev went with slider.*
 
-### 6. What mattered, and what did not
-| change | effect (Glasnow 2019, rolling) |
+### How Jev is used
+
+![What Jev was given and what it answered](docs/img/jev_example.png)
+
+- Jev does not look at the video. For each pitch it gets one multiple-choice question plus the
+  evidence above. A full real example is in [`docs/jev_example.json`](docs/jev_example.json).
+- pitchtip picks which evidence to give Jev for each pitcher, based on what worked best on his
+  most recent games.
+- Jev almost always answers with close to 0% or 100%, so its own confidence does not tell you
+  which calls to trust. pitchtip uses the vision model's confidence for that, and that is what
+  the STRONG label is.
+- Each call costs about $0.003 per 1,000 pitches and takes 0.1 to 0.2 seconds.
+- Jev was about as accurate as the free local model. It did not beat it by a real margin,
+  because it can only work with the evidence the video gives it.
+
+### What helped and what didn't
+
+| change | result (Glasnow 2019) |
 |---|---|
-| pose model YOLO11s → m → l → **x** | AUC 0.78 → 0.86 → 0.89 → **0.93** |
-| DINOv2 glove-region embedding | glove expert alone reached AUC ~0.86 on Glasnow |
-| trajectories around the lift | +2–3 AUC points |
-| DINOv2-base instead of small | worse (glove crops are only ~30 source pixels) |
-| Jev multi-question ensemble | no gain |
-| pitcher-centred crop for pose (faster) | slightly worse (0.90 vs 0.93) |
+| bigger pose model: YOLO11s, m, l, then **x** | AUC 0.78, 0.86, 0.89, **0.93** |
+| glove image fingerprint (DINOv2) | the glove model alone reached AUC ~0.86 |
+| hand and arm paths around the leg lift | +2–3 AUC points |
+| bigger glove image model (DINOv2-base) | worse, because the glove is only ~30 pixels wide |
+| asking Jev several questions and averaging | no gain |
+| running pose on a crop around the pitcher (faster) | slightly worse (0.90 vs 0.93) |
 
-Leaks we found and removed, worth knowing if you extend this:
-- `onset_time`: Savant clips are cut relative to release, so it encoded delivery length.
-- A runners-on flag used the *post*-play base state.
-- Clip URLs ending in an HTML-escaped `=` silently dropped every 2019 postseason clip.
+Mistakes we found and fixed. These are worth knowing if you build on this:
+- A timing feature measured how long the delivery took, because Savant cuts its clips around
+  the release. That leaked the pitch type, so we removed it.
+- A "runners on base" flag used the base state after the play instead of before it.
+- Some clip links ended in an encoded `=` sign, which silently dropped every 2019 playoff clip.
 
 ## Keys and requirements
 
 | what | needed? | where |
 |---|---|---|
-| `TYPESAFE_API_KEY` | **yes, for Jev decisions** (the local model works without it) | [console.typesafe.ai](https://console.typesafe.ai), early access |
-| MLB Stats API, Baseball Savant | no key | public endpoints |
-| `yt-dlp` | only for YouTube / stream URLs | run automatically via `uvx` if installed, else `brew install yt-dlp` |
-| GPU | strongly recommended | Apple silicon (MPS) or CUDA; YOLO11x is ~2 s/clip on an M-series laptop |
-| disk | ~5 MB per clip while scanning | `scan` deletes clips once their pose file (with glove crops) is saved |
+| `TYPESAFE_API_KEY` | **yes, for Jev calls.** The local model works without it. | [console.typesafe.ai](https://console.typesafe.ai) (early access) |
+| MLB Stats API, Baseball Savant | no key needed | public |
+| `yt-dlp` | only for YouTube or stream links | used through `uvx` if installed, or `brew install yt-dlp` |
+| GPU | strongly recommended | Apple silicon or an NVIDIA GPU. YOLO11x takes ~2 s per clip on an M-series laptop. |
+| disk | ~5 MB per clip while scanning | `scan` deletes each clip after its pose data is saved |
 
 ```bash
 uv sync
-cp .env.example .env        # then add TYPESAFE_API_KEY
+cp .env.example .env        # then add your TYPESAFE_API_KEY
 ```
 
 ## Usage
 
 ```bash
-# 1. Data: labels from the MLB feed, clips from Savant, pose + glove embeddings
+# 1. Get data: pitch labels from MLB, clips from Savant, pose data, glove fingerprints
 uv run pitchtip scan "Mason Miller:2026" "Max Fried:2025:15" --game-type R --game-type D
 
-# 2. Analysis
-uv run pitchtip leaderboard                         # who is most readable
-uv run pitchtip patterns                            # league-wide tell families
+# 2. Look for tells
+uv run pitchtip leaderboard                         # which pitchers are easiest to read
+uv run pitchtip patterns                            # common tells across pitchers
 uv run pitchtip tips "Mason Miller 2026" --mode fb  # ranked tells for one pitcher
 
-# 3. Evaluation (deployment-style; Jev picks its evidence automatically)
-uv run pitchtip rolling "Mason Miller 2026" --mode fb
-uv run pitchtip demo "Mason Miller 2026" --game 849825 --mode fb   # replay one held-out game
+# 3. Test it
+uv run pitchtip rolling "Mason Miller 2026" --mode fb             # season-style test
+uv run pitchtip demo "Mason Miller 2026" --game 849825 --mode fb  # replay one game
 
-# 4. Video and streams
-uv run pitchtip ytest video.mp4 "Mason Miller 2026" 823253 --out out/ --innings 9   # score vs MLB feed
-uv run pitchtip live "https://www.youtube.com/watch?v=…" "Mason Miller 2026" --set-only
+# 4. Videos and streams
+uv run pitchtip ytest video.mp4 "Mason Miller 2026" 823253 --out out/ --innings 9   # score a video
+uv run pitchtip live "https://www.youtube.com/watch?v=..." "Mason Miller 2026" --set-only
 ```
 
-Dataset keys are `"<Pitcher Name> <season>"`. Tips belong to a pitcher *and a period*,
-so models are per pitcher-season.
+Datasets are named `"<Pitcher Name> <season>"`. A tip belongs to one pitcher during one
+period, so each pitcher-season gets its own model.
 
-## How to improve on this
+## How to improve this
 
-Ordered by expected payoff:
+Roughly in order of how much we think each would help:
 
-1. **More games per pitcher.** The YOLO11x re-scan stopped partway, and many pitcher-seasons
-   have only 15 games. Accuracy rose with data everywhere we checked. Run `scan` without a game cap.
-2. **A glove detector and a higher-resolution glove view.** The most common documented tell
-   class (grip visible in the glove) is limited by ~30-pixel glove crops from 720p
-   center-field video. A dedicated glove/ball detector, or 1080p sources, should help most.
-3. **Better onset detection for live use.** YOLO11n sometimes notices the lift late (2–4 s).
-   A small temporal model on the fast keypoints, or a better fast tracker, would make
-   pre-lift calls more consistent.
-4. **Calibrate or fine-tune the decision step.** Jev's probabilities are polarized.
-   Calibrating them, or giving it per-pitcher few-shot context as TypeSafe's tooling
-   matures, may let Jev beat the local model rather than match it.
-5. **More camera angles.** Glove-face and mouth tells need the front or 1B/3B views, which
-   per-pitch Savant clips don't provide.
-6. **Drift detection.** Tips change mid-season, and pitchers fix them. Retrain on a rolling
-   window and alert when a pitcher's readability jumps. That is also a defensive product:
-   tell your own pitchers when they start tipping.
-7. **Broader validation.** Run `ytest` on full innings for more pitchers. So far the clip
-   tests are mostly Mason Miller.
+1. **More games per pitcher.** We stopped the YOLO11x scan partway, and many pitcher-seasons
+   have only 15 games. Accuracy went up with more data every time we checked. Run `scan`
+   without a game limit.
+2. **A glove detector and sharper video.** The most common known tip is seeing the grip in the
+   glove. In 720p center-field video the glove is only about 30 pixels wide. A glove or ball
+   detector, or 1080p video, should help the most.
+3. **Faster leg-lift detection for live use.** The small tracker sometimes notices the lift 2 to 4
+   seconds late. A better fast tracker would make the before-the-lift calls more consistent.
+4. **Calibrate Jev.** Jev's probabilities are too extreme. Calibrating them, or giving Jev a few
+   examples per pitcher, might let it beat the local model instead of just matching it.
+5. **More camera angles.** Tips in the face of the glove or the mouth need a front or side view.
+   Savant's per-pitch clips only have the center-field view.
+6. **Watch for changes.** Pitchers fix their tips during a season. Retrain on recent games and
+   flag when a pitcher suddenly gets easier to read. Teams could also use this on their own
+   pitchers to catch tipping early.
+7. **Test more pitchers on video.** Most of the video tests so far are Mason Miller.
 
 ## Data and limits
 
-- Clips and broadcast video belong to MLB and its broadcasters. Use them for personal research
-  only. `data/` is gitignored and no video is committed.
-- Each clip or replay result is from one game (35–76 pitches). The rolling evaluation is
-  the reliable number.
-- Readability is not the same as exploitability. Teams report that knowing the pitch does not
-  guarantee hitting it, and false "tipping" alarms are common.
+- Clips and broadcast video belong to MLB and the broadcasters. Use them for personal research.
+  The `data/` folder is not committed and no video is in this repo. The few still frames above
+  are annotated examples.
+- Each video test is one game or a few innings (19 to 76 pitches). The season-style test over
+  ~9,500 pitches is the more reliable number.
+- Being able to read a pitcher does not mean a hitter can hit him. Teams also report that many
+  "tipping" claims turn out to be wrong.
 
-Research notes, the documented-tip catalog, and every experiment are in
+More detail, the list of known tips we used to check our work, and every experiment are in
 [`docs/TIPPING.md`](docs/TIPPING.md) and [`docs/tip_catalog.csv`](docs/tip_catalog.csv).
