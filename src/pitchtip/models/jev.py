@@ -104,7 +104,9 @@ BEHAVIOR_INSTRUCTIONS = (
     "motion, elbows, posture. Evidence: (1) a vision model's calibrated probabilities, "
     "(2) the pitches thrown on the most visually similar past deliveries, (3) this "
     "pitcher's known tells with today's readings. Weigh agreeing evidence; when evidence "
-    "is weak, stay close to the arsenal base rates."
+    "is weak, stay close to the arsenal base rates. The vision model's track record on "
+    "unseen games tells you how far to trust its confidence: follow it where it has been "
+    "reliable, discount it where it has not."
 )
 
 
@@ -138,20 +140,26 @@ class JevBehavior:
             st = {"arsenal_base_rates": {c: round(float(p), 3) for c, p in self.base.items()}}
             if self.variant in ("probs", "probs+knn", "full", "experts"):
                 st["vision_model_probabilities"] = {c: round(float(p), 3) for c, p in zip(self.m.classes, P[i])}
-            if self.variant in ("experts", "full") and EP:
+            if self.variant in ("experts", "full", "trust+full") and EP:
                 st["expert_opinions"] = {
                     {"body": "body position & movement model", "glove": "glove/hands appearance model",
                      "linear": "simple posture model"}[n]: {c: round(float(p), 3) for c, p in zip(self.m.classes, EP[n][i])}
                     for n in EP}
                 if getattr(self.m, "expert_weights", None):
                     st["expert_reliability_for_this_pitcher"] = {n: float(w) for n, w in self.m.expert_weights.items()}
-            if self.variant in ("knn", "probs+knn", "full"):
+            if self.variant in ("trust", "trust+full"):
+                st["vision_model_probabilities"] = {c: round(float(p), 3) for c, p in zip(self.m.classes, P[i])}
+                st["vision_model_confidence"] = round(float(P[i].max()), 3)
+                st["vision_model_track_record_on_unseen_games"] = {
+                    "by_confidence": getattr(self.m, "reliability", {}),
+                    "accuracy_when_it_calls": getattr(self.m, "per_call", {})}
+            if self.variant in ("knn", "probs+knn", "full", "trust", "trust+full"):
                 nn = np.argsort(-sims[i])[: self.k]
                 votes = pd.Series(self.y[nn]).value_counts()
                 st["most_similar_past_deliveries"] = {
                     "k": self.k, "pitch_counts": {c: int(n) for c, n in votes.items()},
                     "closest_5": [str(self.y[j]) for j in nn[:5]]}
-            if self.variant in ("tells", "full") and self.tcols:
+            if self.variant in ("tells", "full", "trust+full") and self.tcols:
                 z = (df.iloc[i][self.tcols].to_numpy(np.float64) - self.tmu) / self.tsd
                 st["known_tells"] = [
                     {"tell": t, "this_pitch_reading_z": round(float(v), 2)}

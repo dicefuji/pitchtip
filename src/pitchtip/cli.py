@@ -257,14 +257,50 @@ def train(pitcher: str, mode: str = "type", per_game: bool = True):
 
 @app.command()
 def live(source: str, key: str = typer.Argument(..., help='dataset to learn the pitcher from, e.g. "Tyler Glasnow 2019"'),
-         mode: str = "type", jev: bool = True, log: Optional[str] = None):
+         mode: str = "type", jev: bool = True, log: Optional[str] = None,
+         train_before: Optional[str] = typer.Option(None, help="only learn from games before this date (YYYY-MM-DD)")):
     """Call pitches from behavior on a stream URL (yt-dlp) or a recorded video file."""
     from pathlib import Path
-    from pitchtip import live as live_mod
+    from pitchtip import config, live as live_mod
+    from pitchtip.config import slug
     from pitchtip.predictor import Predictor
-    pr = Predictor(key, mode, use_jev=jev).fit()
+    games = None
+    if train_before:
+        pf = pd.read_parquet(config.FEATURES_DIR / f"{slug(key)}.parquet")
+        games = set(pf[pf.date < train_before].game_pk)
+    pr = Predictor(key, mode, use_jev=jev).fit(games)
     typer.echo(f"model ready for {key}: classes {pr.model.classes}")
     live_mod.run(source, pr, log=Path(log) if log else None)
+
+
+@app.command()
+def reel(key: str, game: int, out: str = "data/reel.mp4", n: int = 200):
+    """Stitch one game's clips (in pitch order) into a single broadcast-like video."""
+    import cv2
+    from pitchtip import config
+    from pitchtip.config import slug
+    df = pd.read_parquet(dataset.pitches_path(key))
+    rows = df[df.game_pk == game].sort_values(["at_bat", "pitch_number"]).head(n)
+    w = None
+    truth = []
+    for r in rows.itertuples():
+        clip = config.CLIPS_DIR / slug(r.pitcher_name) / f"{r.play_id}.mp4"
+        if not clip.exists():
+            continue
+        cap = cv2.VideoCapture(str(clip))
+        fps = cap.get(cv2.CAP_PROP_FPS) or 30
+        if w is None:
+            size = (int(cap.get(3)), int(cap.get(4)))
+            w = cv2.VideoWriter(out, cv2.VideoWriter_fourcc(*"mp4v"), fps, size)
+        while True:
+            ok, f = cap.read()
+            if not ok:
+                break
+            w.write(cv2.resize(f, size))
+        truth.append(r.pitch_type)
+        cap.release()
+    w.release()
+    typer.echo(f"{out}: {len(truth)} pitches; actual sequence: {' '.join(truth)}")
 
 
 @app.command()

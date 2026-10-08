@@ -100,6 +100,16 @@ class BehaviorModel:
             yi = np.array([self.classes.index(c) for c in y])
             nll = lambda T: -np.log(np.clip(_temp(pm, T)[np.arange(len(yi)), yi], 1e-9, 1)).mean()
             self.temperature = float(minimize_scalar(nll, bounds=(0.3, 5), method="bounded").x)
+            # Track record on held-out games: how often the call was right at each confidence.
+            pc = _temp(pm, self.temperature)
+            conf, hit = pc.max(1), pc.argmax(1) == yi
+            edges = [0.0, 0.55, 0.65, 0.75, 0.85, 1.01]
+            self.reliability = {
+                f"{lo:.2f}-{min(hi, 1):.2f}": {"calls": int(((conf >= lo) & (conf < hi)).sum()),
+                                               "right": round(float(hit[(conf >= lo) & (conf < hi)].mean()), 3)}
+                for lo, hi in zip(edges[:-1], edges[1:]) if ((conf >= lo) & (conf < hi)).sum() >= 5}
+            self.per_call = {c: round(float(hit[pc.argmax(1) == k].mean()), 3)
+                             for k, c in enumerate(self.classes) if (pc.argmax(1) == k).sum() >= 5}
             self.expert_weights = dict(zip([n for n in EXPERTS if n in oof],
                                            np.abs(self.meta.coef_).reshape(len(self.meta.coef_), -1, len(self.classes)).mean((0, 2)).round(3)))
         self._fit_experts(df, hands, emb, y)
