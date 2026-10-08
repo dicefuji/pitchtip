@@ -189,14 +189,54 @@ def pose_frame(frame: np.ndarray, prev_box: np.ndarray | None, conf: float = 0.3
     return _select(res, frame.shape[0], prev_box)
 
 
+CROP_SCALE = 1.7   # crop side = this x pitcher height
+CROP_IMGSZ = 384  # model input size for crops
+
+
+def _crop_window(box: np.ndarray, frame_shape) -> tuple[int, int, int]:
+    """Square window (x0, y0, side) around a pitcher box, clamped to the frame."""
+    h, w = frame_shape[:2]
+    side = int(min(max(CROP_SCALE * (box[3] - box[1]), 64), h, w))
+    cx, cy = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2
+    x0 = int(np.clip(cx - side / 2, 0, w - side))
+    y0 = int(np.clip(cy - side / 2, 0, h - side))
+    return x0, y0, side
+
+
+def _pose_on_crops(model, frames_bgr: list, box: np.ndarray, conf: float = 0.3):
+    """Pose on a pitcher-centered crop for each frame -> results mapped to frame coords."""
+    x0, y0, side = _crop_window(box, frames_bgr[0].shape)
+    crops = [f[y0:y0 + side, x0:x0 + side] for f in frames_bgr]
+    res = model(crops, verbose=False, conf=conf, device=_device, imgsz=CROP_IMGSZ)
+    out = []
+    for r in res:
+        if r.keypoints is None or len(r.boxes) == 0:
+            out.append((None, None))
+            continue
+        boxes = r.boxes.xyxy.cpu().numpy() + [x0, y0, x0, y0]
+        xy = r.keypoints.xy.cpu().numpy() + [x0, y0]
+        kc = r.keypoints.conf
+        c = kc.cpu().numpy() if kc is not None else np.ones(xy.shape[:2])
+        # the pitcher is the person nearest the crop centre with the tallest box
+        centers = (boxes[:, :2] + boxes[:, 2:]) / 2
+        d = np.linalg.norm(centers - [x0 + side / 2, y0 + side / 2], axis=1) / side
+        score = (boxes[:, 3] - boxes[:, 1]) / side - d
+        i = int(np.argmax(score))
+        out.append((np.concatenate([xy[i], c[i][:, None]], axis=1), boxes[i]))
+    return out
+
+
 def extract(clip: Path, hand: str | None = None, target_fps: float = 15.0,
-            max_seconds: float = 8.0, batch: int = 8) -> ClipPose:
+            max_seconds: float = 8.0, batch: int = 8, crop: bool | None = None) -> ClipPose:
     """Pose-track the pitcher. With `hand` given, stops as soon as the early-lift window
     is complete and keeps color glove crops for the set + early-lift frames.
     Frames are run through the pose model in batches for GPU efficiency."""
     from pitchtip.vision import phases
 
+    import os
     model = get_model()
+    if crop is None:
+        crop = os.environ.get("PITCHTIP_POSE_CROP", "0") == "1"
     ts, kps, bxs, hands, kept = [], [], [], [], []
     prev_gray, prev_box, size, seen_cf, done = None, None, (0, 0), False, False
     it = frames(clip, target_fps, max_seconds)
@@ -208,15 +248,24 @@ def extract(clip: Path, hand: str | None = None, target_fps: float = 15.0,
                 break
         if not chunk:
             break
-        results = model([f for _, f in chunk], verbose=False, conf=0.3, device=_device)
-        for (t, frame), res in zip(chunk, results):
+        if crop and prev_box is not None:
+            picks = _pose_on_crops(model, [f for _, f in chunk], prev_box)
+        else:
+            results = model([f for _, f in chunk], verbose=False, conf=0.3, device=_device)
+            picks = None
+        for j, (t, frame) in enumerate(chunk):
             size = (frame.shape[1], frame.shape[0])
             gray = cv2.cvtColor(cv2.resize(frame, (320, 180)), cv2.COLOR_BGR2GRAY)
             if seen_cf and is_hard_cut(prev_gray, gray):
                 done = True  # first cut after the CF view = end of the pitch shot
                 break
             prev_gray = gray
-            kp, box = _select(res, frame.shape[0], prev_box)
+            if picks is not None:
+                kp, box = picks[j]
+                if box is not None and not (0.18 * frame.shape[0] < box[3] - box[1] < 0.75 * frame.shape[0]):
+                    kp, box = None, None  # lost the pitcher / not the CF shot
+            else:
+                kp, box = _select(results[j], frame.shape[0], prev_box)
             ts.append(t)
             if kp is None:
                 kps.append(np.full((17, 3), np.nan)); bxs.append(np.full(4, np.nan))
@@ -234,6 +283,7 @@ def extract(clip: Path, hand: str | None = None, target_fps: float = 15.0,
             ph = phases.segment(_assemble(ts, kps, bxs, hands, size, target_fps), hand)
             if ph is not None and ph.early_end + 2 < len(ts):
                 done = True
+    _release_gpu_memory()
     cp = _assemble(ts, kps, bxs, hands, size, target_fps)
     if hand is not None:
         ph = phases.segment(cp, hand)
@@ -241,6 +291,14 @@ def extract(clip: Path, hand: str | None = None, target_fps: float = 15.0,
             cp.glove = smoothed_glove_crops(kept, cp.kpts, cp.boxes, ph.set_start, ph.early_end)
             cp.glove_start = ph.set_start
     return cp
+
+
+def _release_gpu_memory():
+    """Long-running MPS processes slow to a crawl as cached allocations fragment;
+    releasing the cache after each clip keeps throughput steady."""
+    if _device == "mps":
+        import torch
+        torch.mps.empty_cache()
 
 
 def _assemble(ts, kps, bxs, hands, size, target_fps) -> ClipPose:
