@@ -189,14 +189,21 @@ class JevBehavior:
         async def one(client, st):
             async with sem:
                 t0 = time.perf_counter()
-                for attempt in range(3):
+                r = None
+                for attempt in range(5):
                     try:
-                        r = await client.system_one(state=st, questions=qs, **kw)
+                        r = await client.system_one(state=st, questions=qs, timeout=30.0, **kw)
                         break
                     except Exception:
-                        if attempt == 2:
-                            raise
-                        await asyncio.sleep(1 + attempt)
+                        await asyncio.sleep(1 + 2 * attempt)
+                if r is None:
+                    # Jev unreachable: fall back to the vision model's probabilities for this pitch.
+                    probs = dict(st.get("vision_model_probabilities") or
+                                 {c: float(p) for c, p in st["arsenal_base_rates"].items()})
+                    best = max(probs, key=probs.get)
+                    return {"choice": best, "confidence": probs[best], "probabilities": probs,
+                            "latency_s": time.perf_counter() - t0, "approx_input_tokens": 0,
+                            "fallback": True}
                 probs = {c: float(np.mean([r.choices[k].probabilities.get(c, 0) for k in qs]))
                          for c in self.criteria}
                 best = max(probs, key=probs.get)
