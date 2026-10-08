@@ -204,5 +204,7 @@ when the signal is weak, plus track record or similar deliveries when it is stro
 | Glasnow, 2019 ALDS G5 (YOLO11x) | 36/40 | **89%** | 68% |
 | Peralta, 2025-09-22 (YOLO11x) | 66/76 | **70%** | 55% |
 
+| **Mason Miller, 2026 NLDS G2 (alleged tip)** (`demo`, YOLO11x) | 37/37 | **78%** (29/37); STRONG calls 7/7; 9th inning 21/25 | 51% |
+
 Jev's own confidence is polarized: almost every call is ≥75%. When you need to decide which
 calls to act on, gate on the local model's confidence, whose top-quarter calls run 85–96% correct.

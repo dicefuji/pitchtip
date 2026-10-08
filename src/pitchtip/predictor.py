@@ -7,6 +7,7 @@ from the future is used. Decision = BehaviorModel probabilities, optionally fuse
 from __future__ import annotations
 
 import asyncio
+import warnings
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -35,6 +36,7 @@ def raw_training(key: str, mode: str, games: set | None = None):
 def causal_normalize(df: pd.DataFrame, hands: np.ndarray, emb: np.ndarray, warmup: int = 5):
     """Subtract the mean of earlier pitches in the same game (first `warmup` pitches use
     the mean of the first `warmup` pitches)."""
+    warnings.filterwarnings("ignore", message="Mean of empty slice")
     df = df.copy()
     cols = dataset.feature_columns(df)
     hands, emb = hands.copy(), emb.copy()

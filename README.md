@@ -32,6 +32,8 @@ broadcast clip / stream
 **Live replays** (one continuous video, trained only on earlier games):
 - Glasnow, 2019 ALDS G5: **89–94%** of called pitches, against a 68% base rate.
 - Peralta, 2025-09-22: **70%**, against a 55% base rate.
+- Mason Miller, 2026 NLDS G2 (the alleged-tipping game): **78%**, against a 51% base rate. All 7
+  STRONG calls were correct.
 
 Jev costs about $0.003 per 1,000 pitches and answers in ~0.1–0.2 s.
 
