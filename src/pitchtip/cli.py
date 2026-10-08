@@ -304,7 +304,8 @@ def report(path: str = "data/rolling_results.jsonl"):
 @app.command()
 def ytest(video: str, key: str, game: int, out: str = typer.Option(..., help="output dir"),
           mode: str = "type", variant: str = "probs+knn", label: str = "", set_only: bool = False,
-          innings: Optional[list[int]] = typer.Option(None, help="restrict the feed to the innings shown in the video")):
+          innings: Optional[list[int]] = typer.Option(None, help="restrict the feed to the innings shown in the video"),
+          train_all: bool = typer.Option(False, help="train on every other game (incl. later ones), never the test game")):
     """Test on arbitrary broadcast video (e.g. YouTube) and score against the MLB feed."""
     from pathlib import Path
     from pitchtip import config, youtube
@@ -316,7 +317,7 @@ def ytest(video: str, key: str, game: int, out: str = typer.Option(..., help="ou
     if gdate is None:
         import requests
         gdate = requests.get(f"https://statsapi.mlb.com/api/v1.1/game/{game}/feed/live").json()["gameData"]["datetime"]["officialDate"]
-    prior = set(pf[pf.date < gdate].game_pk)
+    prior = set(pf[pf.game_pk != game].game_pk) if train_all else set(pf[pf.date < gdate].game_pk)
     pr = Predictor(key, mode, use_jev=True, variant=variant, set_only=set_only).fit(prior)
     typer.echo(f"{key}: trained on {len(prior)} games before {gdate}; classes {pr.model.classes}")
     od = Path(out)
