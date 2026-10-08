@@ -302,6 +302,56 @@ def report(path: str = "data/rolling_results.jsonl"):
 
 
 @app.command()
+def ytest(video: str, key: str, game: int, out: str = typer.Option(..., help="output dir"),
+          mode: str = "type", variant: str = "probs+knn", label: str = ""):
+    """Test on arbitrary broadcast video (e.g. YouTube) and score against the MLB feed."""
+    from pathlib import Path
+    from pitchtip import config, youtube
+    from pitchtip.config import slug
+    from pitchtip.labels import make_labels
+    from pitchtip.predictor import Predictor
+    pf = pd.read_parquet(config.FEATURES_DIR / f"{slug(key)}.parquet")
+    gdate = str(pf[pf.game_pk == game].date.iloc[0]) if (pf.game_pk == game).any() else None
+    if gdate is None:
+        import requests
+        gdate = requests.get(f"https://statsapi.mlb.com/api/v1.1/game/{game}/feed/live").json()["gameData"]["datetime"]["officialDate"]
+    prior = set(pf[pf.date < gdate].game_pk)
+    pr = Predictor(key, mode, use_jev=True, variant=variant).fit(prior)
+    typer.echo(f"{key}: trained on {len(prior)} games before {gdate}; classes {pr.model.classes}")
+    od = Path(out)
+    calls = youtube.run(video, pr, od)
+    feed = youtube.feed_pitches(game, int(pf.pitcher_id.iloc[0]))
+    feed["label"] = make_labels(feed.pitch_type, mode) if mode == "fb" else feed.pitch_type.where(
+        feed.pitch_type.isin(pr.model.classes), "OTHER")
+    off, match = youtube.align(np.array([c["t"] for c, _, _ in calls]), feed.t.to_numpy())
+    rows = []
+    for i, (c, cp, ph) in enumerate(calls):
+        j = match.get(i)
+        truth = feed.label.iloc[j] if j is not None else None
+        frame = np.load(od / f"call_{i:03d}_frame.npy")
+        youtube.render(frame, cp, ph, c | {"jev": c["jev"]}, truth, od / f"call_{i:03d}.jpg",
+                       f"{label or key}  t={c['t']:.0f}s" + (f"  {feed.batter.iloc[j]} (count after: {feed['count'].iloc[j]})" if j is not None else ""))
+        rows.append({"i": i, "video_t": round(c["t"], 1), "call": c["call"], "trust": round(c["trust"], 3),
+                     "strong": c["strong"], "jev": c["jev"], "vision": c["vision"],
+                     "matched": j is not None, "actual": truth,
+                     "batter": feed.batter.iloc[j] if j is not None else None,
+                     "count": feed["count"].iloc[j] if j is not None else None})
+    df = pd.DataFrame(rows)
+    df.to_json(od / "calls.json", orient="records", indent=1)
+    m = df[df.matched & (df.actual != "OTHER")]
+    acc = (m.call == m.actual).mean() if len(m) else float("nan")
+    base = m.actual.value_counts(normalize=True).max() if len(m) else float("nan")
+    st = m[m.strong]
+    summary = {"video": video, "key": key, "game": game, "date": gdate, "pitches_in_feed": len(feed),
+               "calls": len(df), "matched": int(df.matched.sum()), "unmatched_detections": int((~df.matched).sum()),
+               "accuracy": round(float(acc), 3), "base_rate": round(float(base), 3),
+               "strong_calls": len(st), "strong_accuracy": round(float((st.call == st.actual).mean()), 3) if len(st) else None,
+               "offset_s": round(off, 1)}
+    (od / "summary.json").write_text(json.dumps(summary, indent=1))
+    typer.echo(json.dumps(summary, indent=1))
+
+
+@app.command()
 def train(pitcher: str, mode: str = "type", per_game: bool = True):
     """Fit the local model on all games and save it for live use."""
     from pitchtip.models import local

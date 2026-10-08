@@ -22,20 +22,22 @@ KP = {
 HAND_PATCH = 24   # grayscale hands/glove patch kept for every frame
 GLOVE_PATCH = 64  # color glove crop kept for the set + early-lift window
 
-_model = None
+_models: dict = {}
 _device = None
+FAST_WEIGHTS = "yolo11n-pose.pt"  # cheap tracker for live cascades
 
 
 def get_model(weights: str | None = None):
-    global _model, _device
-    if _model is None:
-        import os
-        weights = weights or os.environ.get("PITCHTIP_POSE_WEIGHTS", "yolo11x-pose.pt")
+    """Pose model by weights name (default: PITCHTIP_POSE_WEIGHTS or YOLO11x), cached."""
+    global _device
+    import os
+    weights = weights or os.environ.get("PITCHTIP_POSE_WEIGHTS", "yolo11x-pose.pt")
+    if weights not in _models:
         import torch
         from ultralytics import YOLO
-        _model = YOLO(weights)
+        _models[weights] = YOLO(weights)
         _device = "mps" if torch.backends.mps.is_available() else ("cuda" if torch.cuda.is_available() else "cpu")
-    return _model
+    return _models[weights]
 
 
 @dataclass
@@ -183,10 +185,28 @@ def _select(res, frame_h: int, prev_box: np.ndarray | None):
     return np.concatenate([xy, c[:, None]], axis=1), boxes[idx]
 
 
-def pose_frame(frame: np.ndarray, prev_box: np.ndarray | None, conf: float = 0.3):
+def pose_frame(frame: np.ndarray, prev_box: np.ndarray | None, conf: float = 0.3, weights: str | None = None):
     """Run pose on one frame; returns (kpts (17,3), box (4,)) for the pitcher or (None, None)."""
-    res = get_model()(frame, verbose=False, conf=conf, device=_device)[0]
+    res = get_model(weights)(frame, verbose=False, conf=conf, device=_device)[0]
     return _select(res, frame.shape[0], prev_box)
+
+
+def pose_frames(frames_bgr: list, batch: int = 8, conf: float = 0.3):
+    """Accurate (default-model) pose over a list of frames, batched; tracks the pitcher."""
+    model = get_model()
+    kps, bxs, prev_box = [], [], None
+    for i in range(0, len(frames_bgr), batch):
+        chunk = frames_bgr[i:i + batch]
+        for f, res in zip(chunk, model(chunk, verbose=False, conf=conf, device=_device)):
+            kp, box = _select(res, f.shape[0], prev_box)
+            if kp is None:
+                kps.append(np.full((17, 3), np.nan)); bxs.append(np.full(4, np.nan))
+                continue
+            prev_box = box
+            kp = kp.copy(); kp[kp[:, 2] < 0.3, :2] = np.nan
+            kps.append(kp); bxs.append(box)
+    _release_gpu_memory()
+    return np.array(kps).reshape(-1, 17, 3), np.array(bxs).reshape(-1, 4)
 
 
 CROP_SCALE = 1.7   # crop side = this x pitcher height

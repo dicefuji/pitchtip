@@ -1,0 +1,123 @@
+{
+ "question": {
+  "type": "choice",
+  "instructions": "Predict the pitch a baseball pitcher is about to throw using ONLY his body language before release (set position and the start of the leg lift): glove/hand position, grip motion, elbows, posture. Evidence: (1) a vision model's calibrated probabilities, (2) the pitches thrown on the most visually similar past deliveries, (3) this pitcher's known tells with today's readings. Weigh agreeing evidence; when evidence is weak, stay close to the arsenal base rates. The vision model's track record on unseen games tells you how far to trust its confidence: follow it where it has been reliable, discount it where it has not.",
+  "criteria": {
+   "SL": "SL (52% of this pitcher's pitches)",
+   "FF": "FF (48% of this pitcher's pitches)"
+  }
+ },
+ "state": {
+  "arsenal_base_rates": {
+   "SL": 0.52,
+   "FF": 0.48
+  },
+  "expert_opinions": {
+   "body position & movement model": {
+    "FF": 0.743,
+    "SL": 0.257
+   },
+   "simple posture model": {
+    "FF": 0.732,
+    "SL": 0.268
+   },
+   "glove/hands appearance model": {
+    "FF": 0.598,
+    "SL": 0.402
+   }
+  },
+  "expert_reliability_for_this_pitcher": {
+   "body": 0.518,
+   "glove": 0.829,
+   "linear": 0.214
+  },
+  "vision_model_probabilities": {
+   "FF": 0.777,
+   "SL": 0.223
+  },
+  "vision_model_confidence": 0.777,
+  "vision_model_track_record_on_unseen_games": {
+   "by_confidence": {
+    "0.00-0.55": {
+     "calls": 82,
+     "right": 0.549
+    },
+    "0.55-0.65": {
+     "calls": 151,
+     "right": 0.563
+    },
+    "0.65-0.75": {
+     "calls": 137,
+     "right": 0.788
+    },
+    "0.75-0.85": {
+     "calls": 205,
+     "right": 0.805
+    },
+    "0.85-1.00": {
+     "calls": 268,
+     "right": 0.91
+    }
+   },
+   "accuracy_when_it_calls": {
+    "FF": 0.757,
+    "SL": 0.778
+   }
+  },
+  "most_similar_past_deliveries": {
+   "k": 25,
+   "pitch_counts": {
+    "SL": 13,
+    "FF": 12
+   },
+   "closest_5": [
+    "SL",
+    "FF",
+    "SL",
+    "SL",
+    "SL"
+   ]
+  },
+  "known_tells": [
+   {
+    "tell": "When throwing elbow flare in the set is high \u2192 SL 65% of the time (vs 52% overall, AUC 0.68, q=1.51e-16)",
+    "this_pitch_reading_z": -0.22
+   },
+   {
+    "tell": "When torso lean change at leg lift is low \u2192 FF 59% of the time (vs 48% overall, AUC 0.38, q=1.45e-07)",
+    "this_pitch_reading_z": -0.12
+   },
+   {
+    "tell": "When glove-arm elbow bend 2 frames into leg lift (vs his set) is low \u2192 FF 56% of the time (vs 48% overall, AUC 0.39, q=1.19e-06)",
+    "this_pitch_reading_z": 0.0
+   },
+   {
+    "tell": "When glove-arm elbow bend change at leg lift is high \u2192 SL 60% of the time (vs 52% overall, AUC 0.61, q=1.87e-06)",
+    "this_pitch_reading_z": 0.0
+   },
+   {
+    "tell": "When throwing-arm elbow bend in the set is low \u2192 FF 56% of the time (vs 48% overall, AUC 0.39, q=2.24e-06)",
+    "this_pitch_reading_z": 0.07
+   },
+   {
+    "tell": "When glove-hand height change at leg lift is high \u2192 FF 57% of the time (vs 48% overall, AUC 0.60, q=4.33e-06)",
+    "this_pitch_reading_z": 0.0
+   }
+  ]
+ },
+ "answer": {
+  "choice": "FF",
+  "confidence": 0.84,
+  "probabilities": {
+   "SL": 0.16,
+   "FF": 0.84
+  },
+  "latency_s": 0.2157334169605747
+ },
+ "actual": "FF",
+ "expert_weights": {
+  "body": 0.518,
+  "glove": 0.829,
+  "linear": 0.214
+ }
+}
